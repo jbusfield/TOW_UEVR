@@ -123,8 +123,8 @@ local leftHandComponent = nil
 
 local leftJointName = "l_LowerArm_JNT"
 local rightJointName = "r_LowerArm_JNT"
-local leftShoulderName = "pelvis_anim_JNT"
-local rightShoulderName = "pelvis_anim_JNT"
+local leftShoulderName = "pelvis_anim_JNT" --"l_shoulder_JNT"
+local rightShoulderName = "pelvis_anim_JNT" --"r_shoulder_JNT"
 local defaultRootBoneName = "Root_JNT"
 local rootBoneName = defaultRootBoneName
 
@@ -189,7 +189,7 @@ function M.createComponent(skeletalMeshComponent, name, hand)
 
 			local location = hand == 1 and uevrUtils.vector(currentRightLocation[1], currentRightLocation[2], currentRightLocation[3]) or uevrUtils.vector(currentLeftLocation[1], currentLeftLocation[2], currentLeftLocation[3])
 			local rotation = hand == 1 and uevrUtils.rotator(currentRightRotation[1], currentRightRotation[2], currentRightRotation[3]) or uevrUtils.rotator(currentLeftRotation[1], currentLeftRotation[2], currentLeftRotation[3])
-			animation.initPoseableComponent(component, (hand == 1) and rightJointName or leftJointName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
+			animation.initPoseableComponent(component, (hand == 1) and rightJointName or leftJointName, (hand == 1) and rightShoulderName or leftShoulderName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
 		end
 	end
 	return component
@@ -230,34 +230,6 @@ function M.handleInput(state, isHoldingWeapon)
 		animation.updateAnimation("right_hand", "right_trigger_weapon", triggerValue > 100)
 	end
 
-
-	-- local triggerValue = state.Gamepad.bLeftTrigger
-	-- animation.updateAnimation("left_glove", "left_trigger", triggerValue > 100)
-	-- animation.updateAnimation("left_hand", "left_trigger", triggerValue > 100)
-	
-	-- animation.updateAnimation("left_glove", "left_grip", uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_LEFT_SHOULDER))
-	-- animation.updateAnimation("left_hand", "left_grip", uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_LEFT_SHOULDER))
-
-    -- local left_controller = uevr.params.vr.get_left_joystick_source()
-    -- local h_left_rest = uevr.params.vr.get_action_handle("/actions/default/in/ThumbrestTouchLeft")    
-	-- animation.updateAnimation("left_glove", "left_thumb", uevr.params.vr.is_action_active(h_left_rest, left_controller))
-	-- animation.updateAnimation("left_hand", "left_thumb", uevr.params.vr.is_action_active(h_left_rest, left_controller))
-
-
-	-- local triggerValue = state.Gamepad.bRightTrigger
-	-- animation.updateAnimation("right_glove", wandVisible and "right_trigger_wand" or "right_trigger", triggerValue > 100)
-	-- animation.updateAnimation("right_hand", wandVisible and "right_trigger_wand" or "right_trigger", triggerValue > 100)
-
-	-- animation.updateAnimation("right_glove", wandVisible and "right_grip_wand" or "right_grip", uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_RIGHT_SHOULDER))
-	-- animation.updateAnimation("right_hand", wandVisible and "right_grip_wand" or "right_grip", uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_RIGHT_SHOULDER))
-
-	-- if not wandVisible then
-		-- local right_controller = uevr.params.vr.get_right_joystick_source()
-		-- local h_right_rest = uevr.params.vr.get_action_handle("/actions/default/in/ThumbrestTouchRight")    
-		-- animation.updateAnimation("right_glove", "right_thumb", uevr.params.vr.is_action_active(h_right_rest, right_controller))
-		-- animation.updateAnimation("right_hand", "right_thumb", uevr.params.vr.is_action_active(h_right_rest, right_controller))
-	-- end
-
 end
 
 function M.setFingerAngles(fingerIndex, jointIndex, angleID, angle)
@@ -271,7 +243,7 @@ function M.adjustRotation(hand, axis, delta)
 	print("Hand: ",hand," Rotation:",currentRotation[1], currentRotation[2], currentRotation[3],"\n")
 	local location = uevrUtils.vector(currentLocation[1], currentLocation[2], currentLocation[3])
 	local rotation = uevrUtils.rotator(currentRotation[1], currentRotation[2], currentRotation[3])
-	animation.initPoseableComponent((hand == 1) and rightHandComponent or leftHandComponent, (hand == 1) and rightJointName or leftJointName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
+	animation.initPoseableComponent((hand == 1) and rightHandComponent or leftHandComponent, (hand == 1) and rightJointName or leftJointName, (hand == 1) and rightShoulderName or leftShoulderName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
 end
 
 function M.adjustLocation(hand, axis, delta)
@@ -281,7 +253,7 @@ function M.adjustLocation(hand, axis, delta)
 	print("Hand: ",hand," Location:",currentLocation[1], currentLocation[2], currentLocation[3],"\n")
 	local location = uevrUtils.vector(currentLocation[1], currentLocation[2], currentLocation[3])
 	local rotation = uevrUtils.rotator(currentRotation[1], currentRotation[2], currentRotation[3])
-	animation.initPoseableComponent((hand == 1) and rightHandComponent or leftHandComponent, (hand == 1) and rightJointName or leftJointName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
+	animation.initPoseableComponent((hand == 1) and rightHandComponent or leftHandComponent, (hand == 1) and rightJointName or leftJointName, (hand == 1) and rightShoulderName or leftShoulderName, (hand == 1) and leftShoulderName or rightShoulderName, location, rotation, uevrUtils.vector(currentScale, currentScale, currentScale), rootBoneName)
 end
 
 function M.destroyHands()

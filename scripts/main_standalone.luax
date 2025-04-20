@@ -8,17 +8,15 @@ local hands = require("addons/hands")
 local controllers = require("libs/controllers")
 
 local weaponConnected = false
-local playerFOVCorrected = false
 local isHoldingWeapon = false
 
 function on_level_change(level)
 	print("Level changed\n")
-	-- controllers.onLevelChange()
-	-- controllers.createController(0)
-	-- controllers.createController(1)
-	-- controllers.createController(2)
-	-- weaponConnected = false	
-	playerFOVCorrected = false
+	controllers.onLevelChange()
+	controllers.createController(0)
+	controllers.createController(1)
+	controllers.createController(2)
+	weaponConnected = false	
 	flickerFixer.create()
 	hands.reset()
 end
@@ -27,8 +25,10 @@ function on_lazy_poll()
 	if not hands.exists() then
 		hands.create(pawn.FPVMesh)
 	end
-	-- attachWeaponToController()
-	fixPlayerFOV()
+	attachWeaponToController()
+	if pawn.FPVMesh ~= nil then
+		fixPlayerFOV(pawn.FPVMesh)
+	end
 
 end
 
@@ -52,46 +52,41 @@ function attachWeaponToController()
 
 end
 
-function fixPlayerFOV()
-	--if not playerFOVCorrected and pawn.FPVMesh ~= nil then
-	if pawn.FPVMesh ~= nil then
-		local propertyName = "ForegroundPriorityEnabled"
-		local propertyFName = uevrUtils.fname_from_string(propertyName)	
-		local value = 0.0
-		
-		local mesh = pawn.FPVMesh
-		if mesh ~= nil then
-			local materials = mesh.OverrideMaterials
-			for i, material in ipairs(materials) do
-				--local oldValue = material:K2_GetScalarParameterValue(propertyFName)
-				material:SetScalarParameterValue(propertyFName, value)
-				--local newValue = material:K2_GetScalarParameterValue(propertyFName)
-				--print("Material:",i, material:get_full_name(), oldValue, newValue,"\n")
-			end
+function fixPlayerFOV(playerMesh)
+	local propertyName = "ForegroundPriorityEnabled"
+	local propertyFName = uevrUtils.fname_from_string(propertyName)	
+	local value = 0.0
+	
+	local mesh = playerMesh
+	if mesh ~= nil then
+		local materials = mesh.OverrideMaterials
+		for i, material in ipairs(materials) do
+			--local oldValue = material:K2_GetScalarParameterValue(propertyFName)
+			material:SetScalarParameterValue(propertyFName, value)
+			--local newValue = material:K2_GetScalarParameterValue(propertyFName)
+			--print("Material:",i, material:get_full_name(), oldValue, newValue,"\n")
+		end
 
-			children = mesh.AttachChildren
-			if children ~= nil then
-				for i, child in ipairs(children) do
-					if child:is_a(static_mesh_component_c) then
-						local materials = child.OverrideMaterials
-						for i, material in ipairs(materials) do
-							--local oldValue = material:K2_GetScalarParameterValue(propertyFName)
-							material:SetScalarParameterValue(propertyFName, value)
-							--local newValue = material:K2_GetScalarParameterValue(propertyFName)
-							--print("Child Material:",i, material:get_full_name(), oldValue, newValue,"\n")
-						end
+		children = mesh.AttachChildren
+		if children ~= nil then
+			for i, child in ipairs(children) do
+				if child:is_a(static_mesh_component_c) then
+					local materials = child.OverrideMaterials
+					for i, material in ipairs(materials) do
+						--local oldValue = material:K2_GetScalarParameterValue(propertyFName)
+						material:SetScalarParameterValue(propertyFName, value)
+						--local newValue = material:K2_GetScalarParameterValue(propertyFName)
+						--print("Child Material:",i, material:get_full_name(), oldValue, newValue,"\n")
 					end
-					
-					if child:is_a(uevrUtils.get_class("Class /Script/Niagara.NiagaraComponent")) then
-						child:SetNiagaraVariableFloat(propertyName, value)
-						--print("Child Niagara Material:", child:get_full_name(),"\n")
-					end
+				end
+				
+				if child:is_a(uevrUtils.get_class("Class /Script/Niagara.NiagaraComponent")) then
+					child:SetNiagaraVariableFloat(propertyName, value)
+					--print("Child Niagara Material:", child:get_full_name(),"\n")
 				end
 			end
 		end
-		playerFOVCorrected = true
 	end
-
 end
 
 function fixWeaponFOV()
@@ -165,10 +160,10 @@ end
 
 
 function on_post_engine_tick(engine, delta)
-	-- fixWeaponFXFOV()
+	fixWeaponFXFOV()
 
 	if pawn.FPVMesh ~= nil then
-		pawn.FPVMesh:SetVisibility(true, false)
+		pawn.FPVMesh:SetVisibility(false,true)
 	end
 	--animation.updateSkeletalVisualization(hands.getHandComponent(1))
 
