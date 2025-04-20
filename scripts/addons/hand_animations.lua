@@ -30,6 +30,23 @@ handPositions["right_grip"]["on"]["RightHandRing3_JNT"] = {5.6724443435669, 63.0
 handPositions["right_grip"]["on"]["RightHandPinky1_JNT"] = {-40.595561981201, 37.251636505127, -8.3391942977905}
 handPositions["right_grip"]["on"]["RightHandPinky2_JNT"] = {-53.668056488037, 140.37017822266, -86.721374511719}
 handPositions["right_grip"]["on"]["RightHandPinky3_JNT"] = {-21.260492324829, 28.240776062012, 20.569372177124}
+handPositions["right_grip"]["off"] = {}
+handPositions["right_grip"]["off"]["RightHandThumb1_JNT"] = {-44.386493682861, 22.437026977539, -76.045600891113}
+handPositions["right_grip"]["off"]["RightHandThumb2_JNT"] = {4.0847191810608, 18.195903778076, -11.097467422485}
+handPositions["right_grip"]["off"]["RightHandThumb3_JNT"] = {0.0, 0.0, 0.0}
+--handPositions["right_grip"]["off"]["RightHandIndex1_JNT"] = {-5.4112854003906, 10.378118515015, -0.9175192117691}
+--handPositions["right_grip"]["off"]["RightHandIndex2_JNT"] = {-1.4336975812912, 23.672792434692, -0.97983050346375}
+--handPositions["right_grip"]["off"]["RightHandIndex3_JNT"] = {0.0, -8.5377348568727e-07, 0.0}
+handPositions["right_grip"]["off"]["RightHandMiddle1_JNT"] = {5.9782729148865, 2.1833770275116, -4.0905966758728}
+handPositions["right_grip"]["off"]["RightHandMiddle2_JNT"] = {-28.41870880127, 74.714668273926, 27.525941848755}
+handPositions["right_grip"]["off"]["RightHandMiddle3_JNT"] = {0.0, 3.3350531225551e-07, -1.5530051302887e-16}
+handPositions["right_grip"]["off"]["RightHandRing1_JNT"] = {-3.3767223358154, 4.1980667114258, -7.3919062614441}
+handPositions["right_grip"]["off"]["RightHandRing2_JNT"] = {-45.109657287598, 79.521903991699, 17.716226577759}
+handPositions["right_grip"]["off"]["RightHandRing3_JNT"] = {0.0, 3.7352592130446e-07, 0.0}
+handPositions["right_grip"]["off"]["RightHandPinky1_JNT"] = {-9.5717582702637, 3.7818260192871, -1.7375682592392}
+handPositions["right_grip"]["off"]["RightHandPinky2_JNT"] = {-23.376274108887, 30.071979522705, 5.2131567001343}
+handPositions["right_grip"]["off"]["RightHandPinky3_JNT"] = {0.0, 1.7075471987482e-06, -2.544443605465e-14}
+
 
 handPositions["right_grip_weapon"] = {}
 handPositions["right_grip_weapon"]["on"] = {}
@@ -48,7 +65,6 @@ handPositions["right_grip_weapon"]["on"]["RightHandRing3_JNT"] = {5.672444343566
 handPositions["right_grip_weapon"]["on"]["RightHandPinky1_JNT"] = {-30.595754623413, 12.251677513123, 1.6611989736557}
 handPositions["right_grip_weapon"]["on"]["RightHandPinky2_JNT"] = {-58.668590545654, 75.370979309082, -16.722003936768}
 handPositions["right_grip_weapon"]["on"]["RightHandPinky3_JNT"] = {-21.26050567627, 28.24077796936, 20.569374084473}
-
 
 handPositions["right_trigger"] = {}
 handPositions["right_trigger"]["on"] = {}
@@ -70,23 +86,6 @@ handPositions["right_thumb"]["off"]["RightHandThumb1_JNT"] = {-44.386493682861, 
 handPositions["right_thumb"]["off"]["RightHandThumb2_JNT"] = {4.0847191810608, 18.195903778076, -11.097467422485}
 handPositions["right_thumb"]["off"]["RightHandThumb3_JNT"] = {0.0, 0.0, 0.0}
 
-
-handPositions["right_grip"]["off"] = {}
-handPositions["right_grip"]["off"]["RightHandThumb1_JNT"] = {-44.386493682861, 22.437026977539, -76.045600891113}
-handPositions["right_grip"]["off"]["RightHandThumb2_JNT"] = {4.0847191810608, 18.195903778076, -11.097467422485}
-handPositions["right_grip"]["off"]["RightHandThumb3_JNT"] = {0.0, 0.0, 0.0}
---handPositions["right_grip"]["off"]["RightHandIndex1_JNT"] = {-5.4112854003906, 10.378118515015, -0.9175192117691}
---handPositions["right_grip"]["off"]["RightHandIndex2_JNT"] = {-1.4336975812912, 23.672792434692, -0.97983050346375}
---handPositions["right_grip"]["off"]["RightHandIndex3_JNT"] = {0.0, -8.5377348568727e-07, 0.0}
-handPositions["right_grip"]["off"]["RightHandMiddle1_JNT"] = {5.9782729148865, 2.1833770275116, -4.0905966758728}
-handPositions["right_grip"]["off"]["RightHandMiddle2_JNT"] = {-28.41870880127, 74.714668273926, 27.525941848755}
-handPositions["right_grip"]["off"]["RightHandMiddle3_JNT"] = {0.0, 3.3350531225551e-07, -1.5530051302887e-16}
-handPositions["right_grip"]["off"]["RightHandRing1_JNT"] = {-3.3767223358154, 4.1980667114258, -7.3919062614441}
-handPositions["right_grip"]["off"]["RightHandRing2_JNT"] = {-45.109657287598, 79.521903991699, 17.716226577759}
-handPositions["right_grip"]["off"]["RightHandRing3_JNT"] = {0.0, 3.7352592130446e-07, 0.0}
-handPositions["right_grip"]["off"]["RightHandPinky1_JNT"] = {-9.5717582702637, 3.7818260192871, -1.7375682592392}
-handPositions["right_grip"]["off"]["RightHandPinky2_JNT"] = {-23.376274108887, 30.071979522705, 5.2131567001343}
-handPositions["right_grip"]["off"]["RightHandPinky3_JNT"] = {0.0, 1.7075471987482e-06, -2.544443605465e-14}
 
 -- handPositions["right_trigger"] = {}
 -- handPositions["right_trigger"]["off"] = {}
