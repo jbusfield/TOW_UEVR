@@ -79,6 +79,24 @@ Usage
 			local hmdDirection = controllers.getControllerDirection(2)
 			print("Forward Vector is", hmdDirection.X, hmdDirection.Y, hmdDirection.Z)
 
+	controllers.getControllerUpVector(controllerID) - gets the current up vector FVector of the given controller or nil if none found
+		example:
+			local rightUpVector = controllers.getControllerUpVector(1)
+			print("Up Vector is", rightUpVector.X, rightUpVector.Y, rightUpVector.Z)
+
+	controllers.getControllerRightVector(controllerID) - gets the current right vector FVector of the given controller or nil if none found
+		example:
+			local leftRightVector = controllers.getControllerRightVector(0)
+			print("Right Vector is", leftRightVector.X, leftRightVector.Y, leftRightVector.Z)
+
+	controllers.getControllerTargetLocation(handed, collisionChannel, ignoreActors, traceComplex, minHitDistance) - performs line trace from controller and returns hit location
+		example:
+			local hitLocation = controllers.getControllerTargetLocation(0, 0, {}, false, 10)
+
+	controllers.setLogLevel(val) - sets the logging level for controller debug output
+		example:
+			controllers.setLogLevel(LogLevel.Info)
+
 ]]--
 
 local uevrUtils = require("libs/uevr_utils")
@@ -87,7 +105,33 @@ local M = {}
 
 local sourceNames = {[0]="Left",[1]="Right"}
 local actors = {}
-local debugPrint = false
+
+local currentLogLevel = LogLevel.Error
+function M.setLogLevel(val)
+	currentLogLevel = val
+end
+function M.print(text, logLevel)
+	if logLevel == nil then logLevel = LogLevel.Debug end
+	if logLevel <= currentLogLevel then
+		uevrUtils.print("[controllers] " .. text, logLevel)
+	end
+end
+
+local function getCachedController(controllerID)
+	local actor = actors[controllerID]
+	if actor ~= nil and UEVR_UObjectHook.exists(actor) then
+		local components = actor.BlueprintCreatedComponents
+		if components ~= nil then
+			for index, component in pairs(components) do
+				if component ~= nil then
+					return component	
+				end
+			end
+		end
+	end
+	return nil
+end 
+
 
 local function destroyActor(actor)
 	if actor ~= nil then
@@ -95,63 +139,71 @@ local function destroyActor(actor)
 			local components = actor.BlueprintCreatedComponents
 			for index, component in pairs(components) do
 				if component ~= nil then
-					if debugPrint then print("Destroying controller component",component:get_full_name(),"\n") end
+					M.print("Destroying controller component " .. component:get_full_name()) 
 					pcall(function()
 						if actor.K2_DestroyComponent ~= nil then
 							actor:K2_DestroyComponent(component)
-							if debugPrint then print("HMD Controller component destroyed\n") end
+							M.print("HMD Controller component destroyed")
 						end
 					end)	
 				end
 			end
 			if actor.K2_DestroyActor ~= nil then
 				actor:K2_DestroyActor()
-				if debugPrint then print("HMD Controller actor destroyed\n") end
+				M.print("HMD Controller actor destroyed")
 			end
 		end)	
 	end
 end
 
 local function createControllerComponent(parentActor, sourceName, handIndex)	
-	if debugPrint then print("Creating controller",sourceName, handIndex, "\n") end
-	if parentActor ~= nil and parentActor.AddComponentByClass ~= nil then
-		local motionControllerComponent = parentActor:AddComponentByClass(uevrUtils.get_class("Class /Script/HeadMountedDisplay.MotionControllerComponent"), true, uevrUtils.get_transform(), false)
+	local sourceNameStr = sourceName or "Unknown"
+	local handIndexStr = handIndex ~= nil and tostring(handIndex) or "Unknown"
+	M.print("Creating controller " .. sourceNameStr .. " " .. handIndexStr) -- thanks to Lukasblaster
+	if parentActor ~= nil then
+		local motionControllerComponent = uevrUtils.create_component_of_class("Class /Script/HeadMountedDisplay.MotionControllerComponent", true, uevrUtils.get_transform(), false, parentActor)
+		--local motionControllerComponent = parentActor:AddComponentByClass(uevrUtils.get_class("Class /Script/HeadMountedDisplay.MotionControllerComponent"), true, uevrUtils.get_transform(), false)
 		if motionControllerComponent ~= nil then
+			motionControllerComponent:SetCollisionEnabled(0, false)
+			--motionControllerComponent:SetCollisionResponseToAllChannels(0)
 			motionControllerComponent.MotionSource = uevrUtils.fname_from_string(sourceName)
 			if motionControllerComponent.Hand ~= nil then
 				motionControllerComponent.Hand = handIndex
 			end
 			
-			if debugPrint then print("Controller created\n") end
+			M.print("Controller created")
 			return motionControllerComponent
 		end
+	else
+		M.print("Couldn't create controller because parentActor was nil")
 	end
 	return nil
 end
 
 local function createHMDControllerComponent()	
-	if debugPrint then print("Creating HMD controller\n") end
+	M.print("Creating HMD controller")
 	local hmdIndex = 2
 	local parentActor = uevrUtils.spawn_actor(uevrUtils.get_transform(), 1, nil)
-	if debugPrint then print("Created HMD controller actor",parentActor:get_full_name(),"\n") end
-	if parentActor ~= nil and parentActor.AddComponentByClass ~= nil then
-		local motionControllerComponent = parentActor:AddComponentByClass(uevrUtils.get_class("Class /Script/Engine.SceneComponent"), true, uevrUtils.get_transform(), false)
+	if parentActor ~= nil then
+		M.print("Created HMD controller actor " .. parentActor:get_full_name())
+		local motionControllerComponent = uevrUtils.create_component_of_class("Class /Script/Engine.SceneComponent", true, uevrUtils.get_transform(), false, parentActor)
+		--local motionControllerComponent = parentActor:AddComponentByClass(uevrUtils.get_class("Class /Script/Engine.SceneComponent"), true, uevrUtils.get_transform(), false)
 		if motionControllerComponent ~= nil then
-			hmdState = UEVR_UObjectHook.get_or_add_motion_controller_state(motionControllerComponent)	
+			local hmdState = UEVR_UObjectHook.get_or_add_motion_controller_state(motionControllerComponent)	
 			if hmdState ~= nil then
 				hmdState:set_hand(hmdIndex) 
 				hmdState:set_permanent(true)
 				actors[hmdIndex] = parentActor
-				if debugPrint then print("Controller created\n") end
+				M.print("Controller created")
 				return motionControllerComponent
 			else
-				print("HMD Controller state creation failed\n")
+				M.print("HMD Controller state creation failed", LogLevel.Warning)
 			end	
 		else
-			print("HMD Controller component creation failed\n")
+			M.print("HMD Controller component creation failed", LogLevel.Warning)
 		end
 	else
-		print("HMD Controller actor creation failed\n")
+		M.print("HMD Controller actor creation failed", LogLevel.Warning)
 	end
 	destroyActor(parentActor)
 	return nil
@@ -163,10 +215,25 @@ local function createActor(controllerID)
 end
 
 local function resetMotionControllers()
-	if debugPrint then print("Removing all motion controller states\n") end
+	M.print("Removing all motion controller states")
 	if UEVR_UObjectHook.remove_all_motion_controller_states ~= nil then
 		UEVR_UObjectHook.remove_all_motion_controller_states()
 	end
+end
+
+local createAutoCreationMonitor = doOnce(function()
+    uevrUtils.setInterval(1000, function()
+        if M.controllerExists(Handed.Left, false) == false then
+            M.createController(Handed.Left)
+        end
+        if M.controllerExists(Handed.Right, false) == false then
+            M.createController(Handed.Right)
+        end
+    end)
+end, Once.EVER)
+
+function M.autoMonitorHands()
+	createAutoCreationMonitor()
 end
 
 function M.onLevelChange()
@@ -175,54 +242,66 @@ function M.onLevelChange()
 end
 
 function M.getHMDController()
-	local actor = actors[2]
-	if actor ~= nil and UEVR_UObjectHook.exists(actor) then
-		local components = actor.BlueprintCreatedComponents
-		for index, component in pairs(components) do
-			if component ~= nil then
-				return component	
-			end
-		end
-	end
-	return nil
+	return getCachedController(2)
 end
 
 
-function M.getController(controllerID)
-	if controllerID == 2 then
-		return M.getHMDController()
+function M.getController(controllerID, useCached)
+	if useCached == true then
+		return getCachedController(controllerID)
 	else
-		local controllers = uevrUtils.find_all_of("Class /Script/HeadMountedDisplay.MotionControllerComponent", false)
-		if controllers ~= nil then
-			for index, controller in pairs(controllers) do
-				if controller.Hand ~= nil then
-					if controller.Hand == controllerID then 
-						return controller 
-					end
-				else
-					if controller.MotionSource:to_string() == sourceNames[controllerID] then 
-						return controller 
+		if controllerID == 2 then
+			return M.getHMDController()
+		else
+			M.print("Getting controller without cache")
+			local controllers = uevrUtils.find_all_of("Class /Script/HeadMountedDisplay.MotionControllerComponent", false)
+			if controllers ~= nil then
+				for index, controller in pairs(controllers) do
+					if controller.Hand ~= nil then
+						if controller.Hand == controllerID then 
+							return controller 
+						end
+					else
+						if controller.MotionSource:to_string() == sourceNames[controllerID] then 
+							return controller 
+						end
 					end
 				end
+			
 			end
-		
 		end
 	end
 
-
 	return nil
+end
+
+--called after a script restart
+function M.restoreExistingComponents()
+	for i = 0, 1 do
+		if getCachedController(i) == nil then
+			local controller = M.getController(i)
+			if controller ~= nil then
+				-- M.print isnt ready at this point so just use print
+				print("Restoring existing controller " .. i .. ": " .. controller:get_full_name() .. " " .. controller:GetOwner():get_full_name())
+				actors[i] = controller:GetOwner()
+			end
+		end
+	end
 end
 
 function M.hmdControllerExists()
 	return M.getHMDController() ~= nil
 end
 
-function M.controllerExists(controllerID)
-	if controllerID == 2 then
-		return M.hmdControllerExists()
-	else
-		return M.getController(controllerID) ~= nil
-	end
+function M.controllerExists(controllerID, useCached)
+	--return M.getController(controllerID, false) ~= nil
+
+	if useCached == nil then useCached = true end
+	local controller = M.getController(controllerID, useCached)
+	-- if useCached == true and controller == nil then
+		-- controller = M.getController(controllerID, false)
+	-- end
+	return controller ~= nil
 end
 
 function M.createHMDController()
@@ -241,12 +320,17 @@ local function createLeftControllerComponent()
 end
 
 function M.createController(controllerID)
+	M.print("Creating controller " ..  controllerID)
 	if controllerID == 2 then
 		return M.createHMDController()
 	else
 		local controller = nil
-		if not M.controllerExists(controllerID) then
-			controller = createControllerComponent(createActor(controllerID), sourceNames[controllerID], controllerID)
+		if not M.controllerExists(controllerID, true) then
+			if not M.controllerExists(controllerID, false) then
+				controller = createControllerComponent(createActor(controllerID), sourceNames[controllerID], controllerID)
+			else
+				M.restoreExistingComponents()
+			end
 		end
 		return controller
 	end
@@ -272,39 +356,62 @@ function M.resetControllers()
 end
 
 --controllerID 0-left, 1-right, 2-head
-function M.attachComponentToController(controllerID, childComponent, socketName, attachType, weld)
+function M.attachComponentToController(controllerID, childComponent, socketName, attachType, weld, createIfNotExists)
 	if socketName == nil then socketName = "" end
 	if attachType == nil then attachType = 0 end
 	if weld == nil then weld = false end
 	if childComponent ~= nil then
+		M.print("Attaching component " .. childComponent:get_full_name() .. " to controller " .. controllerID)
 		local controller = M.getController(controllerID)
-		if controller ~= nil then
-			childComponent:K2_AttachTo(controller, uevrUtils.fname_from_string(socketName), attachType, weld)
-			return true
+		if controller == nil and createIfNotExists == true then
+			controller = M.createController(controllerID)
 		end
+		if controller ~= nil then
+			return childComponent:K2_AttachTo(controller, uevrUtils.fname_from_string(socketName), attachType, weld)
+		else
+			M.print("Could not attach component to controller " .. controllerID .. " because controller is nil")
+		end
+	else
+		M.print("Could not attach component to controller " .. controllerID .. "  because childComponent is nil")
 	end
 	return false
 end
 
 -- returns an FVector or nil
 function M.getControllerLocation(controllerID)
-	local controller = M.getController(controllerID)
+	local controller = M.getController(controllerID, true)
 	if controller ~= nil then
 		return controller:K2_GetComponentLocation()
+	-- else
+		-- --try getting the pose directly
+		-- local index = uevrUtils.getControllerIndex(controllerID)
+		-- if index ~= nil then
+			-- uevr.params.vr.get_pose(index, temp_vec3f, temp_quatf)
+			-- return uevrUtils.vector(temp_vec3f.X,temp_vec3f.Y,temp_vec3f.Z)
+		-- end	
 	end
 	return nil
 end
 
 function M.getControllerRotation(controllerID)
-	local controller = M.getController(controllerID)
+	local controller = M.getController(controllerID, true)
 	if controller ~= nil then
 		return controller:K2_GetComponentRotation()
+	-- else
+		-- --try getting the pose directly
+		-- local index = uevrUtils.getControllerIndex(controllerID)
+		-- if index ~= nil then
+			-- uevr.params.vr.get_pose(index, temp_vec3f, temp_quatf)
+			-- local poseQuat = uevrUtils.quat(temp_quatf.Z, temp_quatf.X, -temp_quatf.Y, -temp_quatf.W)  --reordered terms to convert UEVR to unreal coord system
+			-- local poseRotator = kismet_math_library:Quat_Rotator(poseQuat)
+			-- return poseRotator
+		-- end	
 	end
 	return nil
 end
 
 function M.getControllerDirection(controllerID)
-	local controller = M.getController(controllerID)
+	local controller = M.getController(controllerID, true)
 	if controller ~= nil then
 		return kismet_math_library:GetForwardVector(M.getControllerRotation(controllerID))
 	end
@@ -312,7 +419,7 @@ function M.getControllerDirection(controllerID)
 end
 
 function M.getControllerUpVector(controllerID)
-	local controller = M.getController(controllerID)
+	local controller = M.getController(controllerID, true)
 	if controller ~= nil then
 		return kismet_math_library:GetUpVector(M.getControllerRotation(controllerID))
 	end
@@ -320,12 +427,61 @@ function M.getControllerUpVector(controllerID)
 end
 
 function M.getControllerRightVector(controllerID)
-	local controller = M.getController(controllerID)
+	local controller = M.getController(controllerID, true)
 	if controller ~= nil then
 		return kismet_math_library:GetRightVector(M.getControllerRotation(controllerID))
 	end
 	return nil
 end
+
+function M.getControllerTargetLocation(handed, collisionChannel, ignoreActors, traceComplex, minHitDistance)
+	if not M.controllerExists(handed) then
+		M.createController(handed)
+	end
+	local direction = M.getControllerDirection(handed)
+	if direction ~= nil then
+		local startLocation = M.getControllerLocation(handed)
+		if startLocation ~= nil then
+			return uevrUtils.getTargetLocation(startLocation, direction, collisionChannel, ignoreActors, traceComplex, minHitDistance)
+		else
+			M.print("Error in getControllerTargetLocation. Controller location was nil")
+		end
+	else
+		M.print("Error in getControllerTargetLocation. Controller direction was nil")
+	end
+	return nil
+end
+
+-- returns an float or nil
+function M.getDistanceFromController(controllerID, component)
+	if component ~= nil then
+		local loc1 = M.getControllerLocation(controllerID)
+		if loc1 ~= nil then
+			local loc2 = component:K2_GetComponentLocation()
+			if loc2 ~= nil then
+				return uevrUtils.distanceBetween(loc1, loc2)
+			end
+		end
+	end
+	return nil
+end
+
+
+local isRestored = false
+uevrUtils.registerPreLevelChangeCallback(function(level)
+	M.print("Pre-Level changed in controllers")
+	M.onLevelChange()
+	if not isRestored then
+		M.restoreExistingComponents()
+		isRestored = true
+	end
+end)
+
+uevrUtils.registerLevelChangeCallback(function(level)
+	M.createController(0)
+	M.createController(1)
+	M.createController(2)
+end)
 
 return M
 
