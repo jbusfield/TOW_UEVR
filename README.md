@@ -7,3 +7,4 @@ A VR first person mod for The Outer Worlds: Spacers Choice Edition using UEVR
 - Working scopes
 - Option to attach the UI to head movement
 - Support for physical gunstocks
+- Roomscale fully supported
