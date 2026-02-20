@@ -146,7 +146,11 @@ Usage
 	uevrUtils.setLogToFile(val) - enables/disables logging to file in addition to console
 		example:
 			uevrUtils.setLogToFile(true)  -- Also write logs to file
-			
+	
+	uevrUtils.printStackTrace() - prints the current Lua stack trace to the log for debugging purposes
+		example:
+			uevrUtils.printStackTrace()  -- Useful for tracing the source of a function call
+
 	uevrUtils.print(str, logLevel) - prints a message with the specified log level (defaults to Debug)
 		example:
 			uevrUtils.print("Starting initialization", LogLevel.Info)
@@ -776,6 +780,7 @@ Usage
 			Post engine
 
 ]]--
+--Find orphaned prints: ^[^-]*[^.\w]print\(
 
 require("libs/enums/unreal")
 -------------------------------
@@ -1370,6 +1375,25 @@ local function executeUEVRCallbacksWithPriorityBooleanResult(callbackName, ...)
 	return result, priority
 end
 
+-- Similar to executeUEVRCallbacksWithPriorityBooleanResult but for arbitrary return values.
+-- Each callback may return (value, priority). The highest-priority non-nil value wins.
+-- If multiple callbacks return the same priority, the last one executed wins.
+local function executeUEVRCallbacksWithPriorityResult(callbackName, ...)
+	local result = nil
+	local priority = 0
+	if uevrCallbacks[callbackName] ~= nil then
+		for i, entry in ipairs(uevrCallbacks[callbackName]) do
+			local funcResult, funcPriority = entry.func(table.unpack({...}))
+			if funcPriority == nil then funcPriority = 0 end
+			if funcResult ~= nil and funcPriority >= priority then
+				result = funcResult
+				priority = funcPriority
+			end
+		end
+	end
+	return result, priority
+end
+
 -- local function executeUEVRCallbacks(callbackName, ...)
 -- 	if uevrCallbacks[callbackName] ~= nil then
 -- 		for i, func in ipairs(uevrCallbacks[callbackName]) do
@@ -1388,6 +1412,10 @@ end
 
 function M.executeUEVRCallbacksWithPriorityBooleanResult(callbackName, ...)
 	return executeUEVRCallbacksWithPriorityBooleanResult(callbackName, ...)
+end
+
+function M.executeUEVRCallbacksWithPriorityResult(callbackName, ...)
+	return executeUEVRCallbacksWithPriorityResult(callbackName, ...)
 end
 
 local function hasUEVRCallbacks(callbackName)
@@ -1459,8 +1487,22 @@ local function updateCharacterHidden()
 	end
 end
 
+local isInCutsceneOverride = nil
+function M.setIsInCutsceneOverride(override)
+	isInCutsceneOverride = override
+end
 local function updateCutscene()
 	if on_cutscene_change ~= nil or hasUEVRCallbacks("on_cutscene_change") then --don't bother doing anything if nothing is listening
+		if isInCutsceneOverride ~= nil then
+			if isInCutscene ~= isInCutsceneOverride then
+				isInCutscene = isInCutsceneOverride
+				if on_cutscene_change ~= nil then
+					on_cutscene_change(isInCutscene)
+				end
+				executeUEVRCallbacks("on_cutscene_change", isInCutscene)
+			end
+			return
+		end
 		if M.getValid(pawn) ~= nil then
 			local playerController = pawn.Controller
 			if playerController ~= nil then
@@ -1502,7 +1544,9 @@ local function updateMontage()
 				if on_montage_change ~= nil then
 					on_montage_change(currentMontage, montageName)
 				end
-				executeUEVRCallbacks("on_montage_change", currentMontage, montageName)
+				--there's a possibility Mesh doesnt exist. In that case we need to scan for all mesh children and I guess pick the first one
+				--same goes for the check in montage.lua. Inefficient though probably need to cache
+				executeUEVRCallbacks("on_montage_change", currentMontage, montageName, M.getValid(pawn, {"Mesh","AnimScriptInstance"}))
 			end
 		end
 	end
@@ -1637,6 +1681,11 @@ function M.initUEVR(UEVR, callbackFunc)
 		executeUEVRCallbacks("postEngineTick", engine, delta)
 	end)
 
+	-- uevr.sdk.callbacks.on_lua_event(function(eventName, eventData)
+	-- 	updateLuaEvent(eventName, eventData)
+	-- end)
+
+
 	if callbackFunc ~= nil then
 		callbackFunc()
 	end
@@ -1663,6 +1712,10 @@ end
 
 function M.setLogToFile(val)
 	logToFile = val
+end
+
+function M.printStackTrace()
+    print(debug.traceback())
 end
 
 function M.print(str, logLevel)
@@ -2323,6 +2376,22 @@ function M.getAllActorsOfClass(className)
 	return actors
 end
 
+-- TArray Support ----------------
+local tArrayExists, tArray = pcall(require, "libs/core/tarray")
+if tArrayExists == false then tArray = nil end
+local function checkTArrayExists()
+	if tArray == nil then
+		M.print("TArray module not loaded. Ensure libs/core/tarray.lua exists and the tarray_helper.dll file is in the plugins folder", LogLevel.Error)
+	end
+	return tArray ~= nil
+end
+---------------------------------
+
+function M.getSocketNames(object, callback)
+---@diagnostic disable-next-line: need-check-nil
+	if checkTArrayExists() then tArray.registerCallback(callback, "FName", object, "GetAllSocketNames()") end
+end
+
 --coutesy of Pande4360
 function M.validate_object(object)
     if object == nil or not UEVR_UObjectHook.exists(object) then
@@ -2332,6 +2401,9 @@ function M.validate_object(object)
     end
 end
 
+---@generic T
+---@overload fun(object: T): T|nil
+---@overload fun(object: any, properties: string[]): any|nil
 function M.getValid(object, properties)
 	if M.validate_object(object) ~= nil then
 		if properties ~= nil and #properties > 0 then
@@ -3329,6 +3401,7 @@ end
 
 --options are manualAttachment, relativeTransform, deferredFinish, parent, tag, removeFromViewport, twoSided, drawSize
 function M.createWidgetComponent(widget, options)
+	if options == nil then options = {} end
 	local component = nil
 	local widgetAlignment = nil
 	local className = nil
@@ -3339,7 +3412,9 @@ function M.createWidgetComponent(widget, options)
 		end
 
 		if M.getValid(widget) ~= nil then
-			widgetAlignment = widget:GetAlignmentInViewport()
+			if widget.GetAlignmentInViewport ~= nil then
+				widgetAlignment = widget:GetAlignmentInViewport()
+			end
 			component = M.create_component_of_class("Class /Script/UMG.WidgetComponent", options.manualAttachment, options.relativeTransform, options.deferredFinish, options.parent, options.tag)
 			if component ~= nil then
 				if options.removeFromViewport == true and widget.RemoveFromViewport ~= nil then
@@ -3498,7 +3573,14 @@ function M.getCleanHitResult(hitResult)
 		local FaceIndex = {}
 		local TraceStart = {}
 		local TraceEnd = {}
-		Statics:BreakHitResult(hitResult, bBlockingHit, bInitialOverlap, Time, Distance, Location, ImpactPoint, Normal, ImpactNormal, PhysMat, HitActor, HitComponent, HitBoneName, HitItem, ElementIndex, FaceIndex, TraceStart, TraceEnd )
+
+		--static void BreakHitResult(const struct FHitResult& Hit, bool* bBlockingHit, bool* bInitialOverlap, float* Time, float* Distance, struct FVector* Location, struct FVector* ImpactPoint, struct FVector* Normal, struct FVector* ImpactNormal, class UPhysicalMaterial** PhysMat, class AActor** HitActor, class UPrimitiveComponent** HitComponent, class FName* HitBoneName, class FName* BoneName, int32* HitItem, int32* ElementIndex, int32* FaceIndex, struct FVector* TraceStart, struct FVector* TraceEnd);
+		local success = pcall(function()
+			Statics:BreakHitResult(hitResult, bBlockingHit, bInitialOverlap, Time, Distance, Location, ImpactPoint, Normal, ImpactNormal, PhysMat, HitActor, HitComponent, HitBoneName, HitItem, ElementIndex, FaceIndex, TraceStart, TraceEnd )
+		end)
+		if not success then
+			--M.print("BreakHitResult failed, falling back to hitResult fields", LogLevel.Warning)
+		end
 
 		local details = {}
 		details.FaceIndex = hitResult.FaceIndex
@@ -3525,32 +3607,38 @@ function M.getCleanHitResult(hitResult)
 	return nil
 end
 
-function M.getLineTraceHitResult(originPosition, originDirection, collisionChannel, traceComplex, ignoreActors, minHitDistance, maxTraceDistance, includeFullDetails)
+function M.getLineTraceHitResult(originPosition, originDirection, collisionChannel, traceComplex, ignoreActors, minHitDistance, maxTraceDistance, includeFullDetails, hitResult)
 	if originPosition ~= nil and originDirection ~= nil then
 		if maxTraceDistance == nil then maxTraceDistance = 8192.0 end
 		local endLocation = originPosition + (originDirection * maxTraceDistance)
-		local ignore_actors = ignoreActors or {}
+		local validIgnoreActors = {}
+		for _, actor in ipairs(ignoreActors or {}) do
+			local valid = M.getValid(actor)
+			if valid then table.insert(validIgnoreActors, valid) end
+		end
 		if traceComplex == nil then traceComplex = false end
 		--if minHitDistance == nil then minHitDistance = 10 end
 		if collisionChannel == nil then collisionChannel = 0 end
 		local world = M.get_world()
 		if world ~= nil then
-			local hit = kismet_system_library:LineTraceSingle(world, originPosition, endLocation, collisionChannel, traceComplex, ignore_actors, 0, reusable_hit_result, true, zero_color, zero_color, 1.0)
+			if hitResult == nil then hitResult = reusable_hit_result end
+			local hit = kismet_system_library:LineTraceSingle(world, originPosition, endLocation, collisionChannel, traceComplex, validIgnoreActors, 0, hitResult, true, zero_color, zero_color, 1.0)
 			local exceedsMinDistance = true
 			if minHitDistance ~= nil then
-				local distance = M.vectorDistance(originPosition, M.vector(reusable_hit_result.Location))
+				local distance = M.vectorDistance(originPosition, M.vector(hitResult.Location))
 				exceedsMinDistance = distance >= minHitDistance
 			end
 			--print(collisionChannel, traceComplex, maxTraceDistance, hit, reusable_hit_result.Distance, minHitDistance,reusable_hit_result.Location.X, reusable_hit_result.Location.Y, reusable_hit_result.Location.Z)
 			if hit and exceedsMinDistance then --reusable_hit_result.Distance > minHitDistance then
 				if includeFullDetails == true then
-					return M.getCleanHitResult(reusable_hit_result)
+					hitResult = M.getCleanHitResult(hitResult)
 				end
-				return reusable_hit_result
+				return hitResult, hitResult and M.vector(hitResult.Location) or endLocation
 			end
+			return nil, endLocation
 		end
 	end
-	return nil
+	return nil, nil
 end
 
 
@@ -3868,7 +3956,6 @@ function M.GetInstanceMatching(class_to_search, match_string)
 		end
 	end
 end
-
 
 -------------------------------------------------------------------------------
 -- Example hook pre function. Post is same but no return.

@@ -51,6 +51,7 @@ local decoupledYaw = nil
 local bodyRotationOffset = 0
 local bodyMesh = nil
 local pawnRotationModeOverride = nil
+local aimCameraOverride = nil
 
 --Normally body yaw only needs to be calculated for one eye only in on_early_calculate_stereo_view_offset
 --but in some cases, like Avowed when climbing, the body yaw needs to be calculated for both eyes or else the eyes desync
@@ -170,21 +171,26 @@ local cameraComponent = {
 			end
 		end
 
-		if self.component ~= nil then
+		if uevrUtils.getValid(self.component) ~= nil and self.component.K2_SetWorldRotation ~= nil then
 			if validController then
 				local controllerID = aimMethod == M.AimMethod.LEFT_CONTROLLER and 0 or (aimMethod == M.AimMethod.RIGHT_CONTROLLER and 1 or (aimMethod == M.AimMethod.HEAD and 2 or 1))
 				self.currentControllerID = controllerID
 
 				local rotation = controllers.getControllerRotation(controllerID)
 				local location = controllers.getControllerLocation(controllerID)
-
-				if aimMethod == M.AimMethod.LEFT_CONTROLLER or aimMethod == M.AimMethod.RIGHT_CONTROLLER then
-					rotation = getAimOffsetAdjustedRotation(rotation)
+				if rotation ~= nil and location ~= nil then
+					if aimMethod == M.AimMethod.LEFT_CONTROLLER or aimMethod == M.AimMethod.RIGHT_CONTROLLER then
+						rotation = getAimOffsetAdjustedRotation(rotation)
+					end
+					--pcall( function() --gun for hire crashes here
+						self.component:K2_SetWorldRotation(rotation, false, reusable_hit_result, false)
+						self.component:K2_SetWorldLocation(location, false, reusable_hit_result, false)
+					--end)
 				end
-
-				self.component:K2_SetWorldRotation(rotation,false,reusable_hit_result,false)
-				self.component:K2_SetWorldLocation(location,false,reusable_hit_result,false)
 			elseif validWeapon then
+				--this if check does not appear to be needed
+				--although it seems like if there is no weapon then location and rotation should be taken from the controller
+				--so maybe its here because that was the original intention
 				local attachment = attachments.getCurrentGrippedAttachment(aimMethod == M.AimMethod.LEFT_WEAPON and Handed.Left or Handed.Right)
 				if attachment ~= nil then
 					local controllerID = aimMethod == M.AimMethod.LEFT_WEAPON and Handed.Left or Handed.Right
@@ -193,48 +199,13 @@ local cameraComponent = {
 					local location, rotation = attachments.getActiveAttachmentTransforms(controllerID)
 					rotation = getAimOffsetAdjustedRotation(rotation)
 
-					--local rotation = controllers.getControllerRotation(controllerID)
-					--local location = controllers.getControllerLocation(controllerID)
-
-					--print("Weapon transfoerms:", weaponLocation.X, weaponLocation.Y, weaponLocation.Z, weaponRotation.Pitch, weaponRotation.Yaw, weaponRotation.Roll)
-					--print("Controller transforms:", location.X, location.Y, location.Z, rotation.Pitch, rotation.Yaw, rotation.Roll)
-					
-					--rotation = getAimOffsetAdjustedRotation(rotation)
-
-					--location.Z = location.Z + 13
-					--uevrUtils.vector(13,0,0)
-
-					-- local vector = uevrUtils.rotateVector(attachments.getActiveAttachmentSightsPositionOffset(controllerID), rotation)
-					-- location = location + vector
-					self.component:K2_SetWorldRotation(rotation,false,reusable_hit_result,false)
-					self.component:K2_SetWorldLocation(location,false,reusable_hit_result,false)
-				end
-				--[[
-					local weaponRotation = attachment:GetSocketRotation(uevrUtils.fname_from_string("Muzzle"))
-					local weaponLocation = attachment:GetSocketLocation(uevrUtils.fname_from_string("Muzzle"))
-					--print("Weapon Socket Rotation:", weaponRotation.Pitch, weaponRotation.Yaw, weaponRotation.Roll)
-					--print("Weapon Socket Location:", weaponLocation.X, weaponLocation.Y, weaponLocation.Z)
-
-					self.currentControllerID = aimMethod == M.AimMethod.LEFT_WEAPON and Handed.Left or Handed.Right
-
-					local rotation = controllers.getControllerRotation(self.currentControllerID)
-					local location = controllers.getControllerLocation(self.currentControllerID)
-
-					--print("Location before", location.X, location.Y, location.Z)
-					--location = location + weaponLocation
-					location.Z = location.Z + 1000 --adjust down a bit to line up better
-					-- location.Y = location.Y + 1000 --adjust down a bit to line up better
-					-- location.X = location.X + 1000 --adjust down a bit to line up better
-					--print("Location after", location.X, location.Y, location.Z)
-
-					if aimMethod == M.AimMethod.LEFT_CONTROLLER or aimMethod == M.AimMethod.RIGHT_CONTROLLER then
-						rotation = getAimOffsetAdjustedRotation(rotation)
+					if rotation ~= nil and location ~= nil then
+						--pcall( function() --gun for hire crashes here
+							self.component:K2_SetWorldRotation(rotation, false, reusable_hit_result, false)
+							self.component:K2_SetWorldLocation(location, false, reusable_hit_result, false)
+						--end)
 					end
-
-					self.component:K2_SetWorldRotation(rotation,false,reusable_hit_result,false)
-					self.component:K2_SetWorldLocation(location,false,reusable_hit_result,false)
-
-				]]--
+				end
 			end
 			return true
 		end
@@ -242,7 +213,7 @@ local cameraComponent = {
 		return false
 	end,
 	setUsePawnControlRotation = function(self, val)
-		if self.component ~= nil and self.component.bUsePawnControlRotation ~= nil then
+		if uevrUtils.getValid(self.component) ~= nil and self.component.bUsePawnControlRotation ~= nil then
 			--print(1, val, self.component:get_full_name())
 			if val == nil then
 				val = self.originalState
@@ -481,7 +452,7 @@ updatePawnSettings = uevrUtils.profiler:wrap("updatePawnSettings", updatePawnSet
 local zeroRotator = uevrUtils.rotator(0,0,0)
 local function updateAim()
 
-	if cameraComponent:updateAim() == true then
+	if aimCameraOverride ~= true and cameraComponent:updateAim() == true then
 		-- if (aimRotationOffset.Pitch == nil or aimRotationOffset.Pitch == 0) and (aimRotationOffset.Yaw == nil or aimRotationOffset.Yaw == 0) and (aimRotationOffset.Roll == nil or aimRotationOffset.Roll == 0) then
 		-- 	cameraComponent:setRotation(zeroRotator)
 		-- else
@@ -653,6 +624,8 @@ end
 
 function M.setCurrentProfile(profileID)
 	paramManager:setActiveProfile(profileID)
+	--if the profile changes, reset the camera component to ensure its using the correct settings
+	resetPawnSettings()
 end
 
 function M.setCurrentProfileByLabel(profileLabel)
@@ -672,6 +645,15 @@ function M.setDisabled(val)
 		--this ensures the camera gets reset to the current pawn orientation when input is re-enabled
 		decoupledYaw = nil
 		bodyRotationOffset = 0
+	end
+end
+
+function M.resetCapsuleComponent()
+	decoupledYaw = nil
+	bodyRotationOffset = 0
+	if rootComponent ~= nil then
+		rootComponent:K2_SetWorldRotation(uevrUtils.rotator(0,0,0),false,reusable_hit_result,false)
+		pawn:K2_SetActorRotation(uevrUtils.rotator(0,0,0), false, reusable_hit_result, false)
 	end
 end
 
@@ -731,6 +713,10 @@ end
 
 function M.setOverridePawnRotationMode(val)
 	pawnRotationModeOverride = val
+end
+
+function M.setAimCameraOverride(val)
+	aimCameraOverride = val
 end
 
 function M.setPawnPositionMode(val)
@@ -1236,7 +1222,7 @@ uevrUtils.registerLevelChangeCallback(function(level)
 	doFixSpatialAudio()
 end)
 
-uevrUtils.registerUEVRCallback("gunstock_transform_change", function(id, newLocation, newRotation)
+uevrUtils.registerUEVRCallback("gunstock_transform_change", function(id, newLocation, newRotation, newOffhandLocationOffset)
 	--only handle gunstock transform changes if aim method is left or right controller since
 	--if its left or right weapon, the weapon already has the gunstock adjustments applied
     local aimMethod = getParameter("aimMethod")
