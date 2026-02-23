@@ -4000,5 +4000,33 @@ hook_function("Class /Script/Engine.PlayerController", "ClientRestart", true, ni
 	end
 , true)
 
+--------------------------
+--- Math functions
+function math:safeNormalize(vector)
+	if vector == nil then return M.vector(0,0,0) end
+	-- UKismetMathLibrary has VSize/Divide_VectorFloat (see Engine_classes.hpp)
+	local len = kismet_math_library:VSize(vector)
+	if len == nil or len < 0.0001 then
+		return M.vector(0,0,0)
+	end
+	return kismet_math_library:Divide_VectorFloat(vector, len)
+end
+
+function math:computeSignedAngleAroundAxis_Rotators(rotationA, rotationB, axis)
+	return math:computeSignedAngleAroundAxis_Vectors(kismet_math_library:GetUpVector(rotationA), kismet_math_library:GetUpVector(rotationB), axis)
+end
+
+function math:computeSignedAngleAroundAxis_Vectors(upVectorA, upVectorB, axis)
+    if axis == nil then return 0.0 end
+    local aUp = self:safeNormalize(upVectorA)
+    local bUp = self:safeNormalize(upVectorB)
+    axis = self:safeNormalize(axis)
+    local cross = kismet_math_library:Cross_VectorVector(aUp, bUp)
+    local sinv = kismet_math_library:Dot_VectorVector(axis, cross) or 0
+    local cosv = kismet_math_library:Dot_VectorVector(aUp, bUp) or 1
+    return kismet_math_library:RadiansToDegrees(math.atan(sinv, cosv))
+end
+--------------------------
 
 return M
+
