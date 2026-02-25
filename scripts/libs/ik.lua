@@ -15,6 +15,8 @@ M.ControllerType = {
     RIGHT_CONTROLLER = 1,
 }
 
+local isDeveloperMode = false
+
 local currentLogLevel = LogLevel.Error
 function M.setLogLevel(val)
 	currentLogLevel = val
@@ -33,15 +35,13 @@ local paramManager = paramModule.new(parametersFileName, parameters, true)
 paramManager:load(true)
 
 local function setParameter(key, value, persist)
+    print("[ik] Setting parameter:", key, value)
     return paramManager:setInActiveProfile(key, value, persist)
 end
 
 local function saveParameter(key, value, persist)
 	--paramManager:set(key, value, persist)
     setParameter(key, value, persist)
-	-- if ikConfigDev ~= nil then
-	-- 	ikConfigDev.updateParameters(paramManager:getAll())
-	-- end
 end
 
 local function getParameter(key)
@@ -87,6 +87,7 @@ local function newIKState()
 	}
 end
 
+
 function M.new(options)
     options = options or {}
     local self = setmetatable({
@@ -95,17 +96,38 @@ function M.new(options)
 
     }, IK)
 
+    if isDeveloperMode then
+        local createConfigMonitor = doOnce(function()
+            uevrUtils.registerUEVRCallback("on_ik_config_param_change", function(key, value, persist)
+                self:setSolverParameter(paramManager:getActiveProfile(), key, value, true)
+            end)
+        end, Once.EVER)
+        createConfigMonitor()
+    end
+
+
     self:create() -- auto-create component
     return self
 end
 
 function IK:setParameters(params, persist)
     for k, v in pairs(params) do
-        saveParameter(k, v, persist)
+        if persist then
+            paramManager:createProfile(k, v.label)
+            paramManager:setActiveProfile(k)
+            for pk, pv in pairs(v) do
+                paramManager:setInActiveProfile(pk, pv, true)
+            end
+        else
+            saveParameter(k, v, persist)
+        end
     end
 end
 
 local function getAncestorBones(mesh, boneName, generations)
+    if mesh == nil or boneName == nil or generations == nil then
+        return {}
+    end
     local ancestors = {}
     local currentBone = boneName
     for i = 1, generations do
@@ -119,17 +141,53 @@ local function getAncestorBones(mesh, boneName, generations)
     return ancestors
 end
 
+local keyMap = {
+    end_bone = "endBone",
+    wrist_bone = "wristBone",
+    end_bone_offset = "handOffset",
+    end_bone_rotation = "endBoneRotation",
+    allow_wrist_affects_elbow = "allowWristAffectsElbow",
+    allow_stretch = "allowStretch",
+    start_stretch_ratio = "startStretchRatio",
+    max_stretch_scale = "maxStretchScale",
+    controller = "controller",
+    twist_bones = "twistBones",
+    invert_forearm_roll = "invertForearmRoll",
+}
 function IK:setSolverParameter(solverId, paramName, value, persist)
-    local p = paramManager:get(solverId) or {}
-    p[paramName] = value
-    saveParameter(solverId, p, persist)
+    if persist then
+        saveParameter(paramName, value, persist)
+        -- local p = paramManager:get(solverId) or {}
+        -- p[paramName] = value
+        -- saveParameter(solverId, p, persist)
+    end
+ 
+            -- self.activeSolvers[solverId] = {
+            --     mesh = mesh,
+            --     rootBone = parentBones[#parentBones],
+            --     jointBone = parentBones[#parentBones - 1],
+            --     endBone = solverParams["end_bone"],
+            --     wristBone = solverParams["wrist_bone"] or "",
+            --     controller = controller,
+            --     handOffset = solverParams["end_bone_offset"] and uevrUtils.vector(solverParams["end_bone_offset"]) or uevrUtils.vector(0,0,0),
+            --     endBoneRotation = solverParams["end_bone_rotation"] and uevrUtils.rotator(solverParams["end_bone_rotation"]) or uevrUtils.rotator(0,0,0),
+            --     allowWristAffectsElbow = solverParams["allow_wrist_affects_elbow"] or false,
+            --     allowStretch = solverParams["allow_stretch"] or false,
+            --     startStretchRatio = solverParams["start_stretch_ratio"] or 0.0,
+            --     maxStretchScale = solverParams["max_stretch_scale"] or 0.0,
+            --     twistBones = solverParams["twist_bones"] or {},
+            --     invertForearmRoll = solverParams["invert_forearm_roll"] or false,
+			-- 	state = newIKState(),
+            -- }
 
-    print("IK:setSolverParameter:", solverId, paramName, value)
-	self.activeSolvers = self.activeSolvers or {}
-	local active = self.activeSolvers[solverId]
-	if active ~= nil then
-		active[paramName] = value
-	end
+    -- print("IK:setSolverParameter:", solverId, paramName, value)
+	-- self.activeSolvers = self.activeSolvers or {}
+	-- local active = self.activeSolvers[solverId]
+	-- if active ~= nil and keyMap[paramName] ~= nil then
+	-- 	active[keyMap[paramName]] = value
+	-- end
+
+    self:setActive(solverId, true)
 end
 
 
@@ -723,8 +781,8 @@ function IK:setActive(solverId, value)
             else
                 controller = controllers.getController(Handed.Right)
             end
-            if mesh == nil or controller == nil or #parentBones ~= 3 then
-                M.print("setActive: Missing mesh or controller or correct bones for solverId " .. tostring(solverId), LogLevel.Warning)
+            if mesh == nil or mesh.GetBoneLocationByName == nil or controller == nil or #parentBones ~= 3 then
+                M.print("setActive: Missing or invalid mesh or controller or correct bones for solverId " .. tostring(solverId), LogLevel.Warning)
                 return
             end
             self.activeSolvers[solverId] = {
@@ -734,8 +792,8 @@ function IK:setActive(solverId, value)
                 endBone = solverParams["end_bone"],
                 wristBone = solverParams["wrist_bone"] or "",
                 controller = controller,
-                handOffset = solverParams["end_bone_offset"] or uevrUtils.vector(0,0,0),
-                endBoneRotation = solverParams["end_bone_rotation"] or uevrUtils.rotator(0,0,0),
+                handOffset = solverParams["end_bone_offset"] and uevrUtils.vector(solverParams["end_bone_offset"]) or uevrUtils.vector(0,0,0),
+                endBoneRotation = solverParams["end_bone_rotation"] and uevrUtils.rotator(solverParams["end_bone_rotation"]) or uevrUtils.rotator(0,0,0),
                 allowWristAffectsElbow = solverParams["allow_wrist_affects_elbow"] or false,
                 allowStretch = solverParams["allow_stretch"] or false,
                 startStretchRatio = solverParams["start_stretch_ratio"] or 0.0,
@@ -796,26 +854,21 @@ end
 -- 	end
 -- end
 
-local createConfigMonitor = doOnce(function()
-	uevrUtils.registerUEVRCallback("on_ik_config_param_change", function(key, value, persist)
-		saveParameter(key, value, persist)
-	end)
-end, Once.EVER)
-
-function M.init(isDeveloperMode, logLevel)
+function M.init(m_isDeveloperMode, logLevel)
     if logLevel ~= nil then
         M.setLogLevel(logLevel)
     end
-    if isDeveloperMode == nil and uevrUtils.getDeveloperMode() ~= nil then
-        isDeveloperMode = uevrUtils.getDeveloperMode()
+    if m_isDeveloperMode == nil and uevrUtils.getDeveloperMode() ~= nil then
+        m_isDeveloperMode = uevrUtils.getDeveloperMode()
     end
 
-    if isDeveloperMode then
+    if m_isDeveloperMode then
         ikConfigDev = require("libs/config/ik_config_dev")
         ikConfigDev.init(paramManager)
-		createConfigMonitor()
     else
     end
+
+    isDeveloperMode = m_isDeveloperMode
 end
 
 return M

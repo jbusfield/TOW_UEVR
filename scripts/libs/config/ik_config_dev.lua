@@ -34,6 +34,7 @@ local configDefaults = {
     max_stretch_scale = 0.0,
     wrist_bone = "",
     twist_bones = {},
+    invert_forearm_roll = false,
 }
 
 local meshList = {}
@@ -139,6 +140,12 @@ local function getConfigWidgets(m_paramManager)
 					initialValue = "",
 					width = 300,
                     isHidden = hideLabels
+				},
+				{
+					widgetType = "checkbox",
+					id = widgetPrefix .. "invert_forearm_roll",
+					label = "Invert Forearm Roll",
+					initialValue = false
 				},
 				{
 					widgetType = "checkbox",
@@ -299,6 +306,8 @@ local function updateUI(params)
         elseif key == "end_control_type" then
             local selectedIndex = value == M.ControllerType.LEFT_CONTROLLER and 1 or 2
             configui.setValue(widgetPrefix .. key, selectedIndex, true)
+        -- elseif key == "end_bone_offset" then
+        --     configui.setValue(widgetPrefix .. key, {value.X, value.Y, value.Z}, true)
         else
 		    setUIValue(key, value)
         end
@@ -319,8 +328,9 @@ function M.showConfiguration(saveFileName, options)
 			}
 		}
 	}
-    for paramName, param in ipairs(configDefaults) do
-		configui.onCreateOrUpdate(widgetPrefix .. paramName, function(value)
+    for paramName, param in pairs(configDefaults) do
+		configui.onUpdate(widgetPrefix .. paramName, function(value)
+            --print("[ik_config_dev] onUpdate callback for param:", paramName, value)
 			updateSetting(paramName, value)
 		end)
 	end
@@ -402,7 +412,7 @@ local function setBoneList()
 end
 
 function M.init(m_paramManager)
-	configDefaults = m_paramManager and m_paramManager:getAllActiveProfileParams() or {}
+	--configDefaults = m_paramManager and m_paramManager:getAllActiveProfileParams() or {}
 	paramManager = m_paramManager
     M.showConfiguration(configFileName)
 

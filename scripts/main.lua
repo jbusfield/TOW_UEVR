@@ -64,6 +64,7 @@ attachments.setGunstockOffsetsEnabled(false)
 hands.setGunstockOffsetsEnabled(true)
 
 local settings = {}
+local meshCopy = nil
 
 local texture = nil
 register_key_bind("F1", function()
@@ -232,7 +233,7 @@ attachments.registerOnGripUpdateCallback(function()
     if configui.getValue("left_handed_mode") then
         return nil,nil,nil,weaponMesh, controllers.getController(Handed.Left)  --, controllers.getController(Handed.Left)
     else
-		local handsComponent = hands.getHandComponent(Handed.Right) --controllers.getController(Handed.Right) -- 
+		local handsComponent = meshCopy or hands.getHandComponent(Handed.Right) --controllers.getController(Handed.Right) -- 
         if status["hasBoltActionFired"] == true then
 			handsComponent = controllers.getController(Handed.Right)
 		end
@@ -1022,7 +1023,6 @@ configui.create(configDefinition)
 -- 	end
 -- end
 
-local meshCopy = nil
 local function getArmsCopy()
 	if meshCopy == nil then
 		local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
@@ -1097,11 +1097,11 @@ local ikParameters = {
 }
 local ikInstance = nil
 register_key_bind("F2", function()
-	--hands.hideHands(true)
+	hands.hideHands(true)
 
 	ikInstance = ik.new({
 	})
-	ikInstance:setParameters(ikParameters, true)
+	--ikInstance:setParameters(ikParameters, true)
 	ikInstance:setActive("a323432_ab_434543")
 	ikInstance:setActive("b567788_ab_434543")
 
