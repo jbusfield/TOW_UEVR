@@ -1097,7 +1097,7 @@ local ikParameters = {
 }
 local ikInstance = nil
 register_key_bind("F2", function()
-	hands.hideHands(true)
+	--hands.hideHands(true)
 
 	ikInstance = ik.new({
 	})
@@ -1154,7 +1154,12 @@ configui.onUpdate("twist_rotation", function(value)
 		--ikInstance:setSolverParameter("b567788_ab_434543", "baseline_forearm_roll_deg", value.z)
 	end
 end)
+local handsHidden = false
 register_key_bind("F3", function()
+	handsHidden = not handsHidden
+    hands.hideHands(handsHidden)
+end)
+register_key_bind("F4", function()
     uevrUtils.profiler:report()
 end)
 

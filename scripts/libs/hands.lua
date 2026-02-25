@@ -1394,26 +1394,59 @@ local function resolveAccessoryMarkerParamsForAttach(accessoryParams, useMontage
 	return markerParams, (markerParams ~= nil and 1 or nil)
 end
 
+-- Hand-specific attachment helpers (keep hand-level logic in this file)
+local function saveHandSnapshot(handed, statusKey)
+	local handObj = M.getHandComponent(handed)
+	if handObj == nil then return end
+	accessoryStatus[statusKey] = {
+		parent = handObj.AttachParent,
+		socket = (handObj.AttachSocketName and handObj.AttachSocketName:to_string()) or "",
+		location = {X = handObj.RelativeLocation.X, Y = handObj.RelativeLocation.Y, Z = handObj.RelativeLocation.Z},
+		rotation = {Pitch = handObj.RelativeRotation.Pitch, Yaw = handObj.RelativeRotation.Yaw, Roll = handObj.RelativeRotation.Roll}
+	}
+end
+
+local function restoreHandSnapshot(handed)
+	local statusKey = "hand_" .. tostring(handed)
+	local handObj = M.getHandComponent(handed)
+	local s = accessoryStatus[statusKey]
+	if handObj ~= nil and s ~= nil and handObj.K2_AttachTo ~= nil then
+		local parent = s.parent
+		local socket = s.socket
+		local location = s.location
+		local rotation = s.rotation
+		if parent ~= nil then
+			handObj:K2_AttachTo(parent, uevrUtils.fname_from_string(socket or ""), 0, false)
+			uevrUtils.set_component_relative_transform(handObj, location or {0,0,0}, rotation or {0,0,0})
+		end
+		accessoryStatus[statusKey] = nil
+	end
+end
+
+local function attachHandToTarget(handed, parentAttachment, socketName, attachType, loc, rot)
+	local handObj = M.getHandComponent(handed)
+	if handObj == nil then return end
+	local statusKey = "hand_" .. tostring(handed)
+	if accessoryStatus[statusKey] == nil then
+		saveHandSnapshot(handed, statusKey)
+	end
+	if handObj.K2_AttachTo ~= nil then
+		handObj:K2_AttachTo(parentAttachment, uevrUtils.fname_from_string(socketName or ""), attachType or 0, false)
+		uevrUtils.set_component_relative_transform(handObj, loc or {0,0,0}, rot or {0,0,0})
+	end
+end
+
 function M.attachHandToAccessory(handed, accessoryID, useMontageProximity, animInstance, montageObject, markerIndexOverride)
     if accessoryID == nil then
         --detach hand
 		--print("Detaching hand ", handed, " from accessory")
         local hand = M.getHandComponent(handed)
 		local statusKey = "hand_" .. tostring(handed)
-        if hand ~= nil and hand.K2_AttachTo ~= nil and accessoryStatus[statusKey] ~= nil then
+		if accessoryStatus[statusKey] ~= nil then
 			markerDebugPrint("[MarkerDebug] Detaching hand=" .. tostring(handed) .. " (restoring previous parent/socket)")
-            --restore previous state
-            local parent = accessoryStatus[statusKey]["parent"]
-            local socket = accessoryStatus[statusKey]["socket"]
-            local location = accessoryStatus[statusKey]["location"]
-            local rotation = accessoryStatus[statusKey]["rotation"]
-            if parent ~= nil then
-				--print("Restoring current hand attachment state for hand ", accessoryStatus[statusKey].location.X, accessoryStatus[statusKey].location.Y, accessoryStatus[statusKey].location.Z, accessoryStatus[statusKey].rotation.Pitch, accessoryStatus[statusKey].rotation.Yaw, accessoryStatus[statusKey].rotation.Roll)
-                hand:K2_AttachTo(parent, uevrUtils.fname_from_string(socket or ""), 0, false)
-                uevrUtils.set_component_relative_transform(hand, location or {0,0,0}, rotation or {0,0,0})
-           	end
-			accessoryStatus["hand_" .. tostring(handed)] = nil
-        end
+			restoreHandSnapshot(handed)
+			uevrUtils.executeUEVRCallbacks("on_accessory_detach", handed)
+		end
 		-- Reset grip animation to open hand
 		holdingAttachment[handed] = nil
 		if type(accessoryStatus["gripAnimationOverride"]) == "table" then
@@ -1422,8 +1455,8 @@ function M.attachHandToAccessory(handed, accessoryID, useMontageProximity, animI
 		M.updateAnimationState(handed)
     else
 		--print("Attaching hand ", handed, " to accessory ", accessoryID)
-        local hand = M.getHandComponent(handed)
-		if hand ~= nil then
+        --local hand = M.getHandComponent(handed)
+		--if hand ~= nil then
             local currentAttachment = attachments.getCurrentGrippedAttachment(Handed.Right)
            	if currentAttachment ~= nil then
 				local attachmentID = attachments.getAttachmentIDFromAttachment(currentAttachment)
@@ -1480,22 +1513,14 @@ function M.attachHandToAccessory(handed, accessoryID, useMontageProximity, animI
 						" grip_animation=" .. tostring(markerParams.grip_animation))
 					local statusKey = "hand_" .. tostring(handed)
 					-- Only snapshot the base state once per activation chain.
-					-- If we overwrite this while already attached, restore will be broken.
 					if accessoryStatus[statusKey] == nil then
-						accessoryStatus[statusKey] = {
-							parent = hand.AttachParent,
-							socket = hand.AttachSocketName:to_string(),
-							location = {X = hand.RelativeLocation.X, Y = hand.RelativeLocation.Y, Z = hand.RelativeLocation.Z},
-							rotation = {Pitch = hand.RelativeRotation.Pitch, Yaw = hand.RelativeRotation.Yaw, Roll = hand.RelativeRotation.Roll}
-						}
+						saveHandSnapshot(handed, statusKey)
 					end
 
-					--print("Saved current hand attachment state for hand ", accessoryStatus["hand_" .. tostring(handed)].location.X, accessoryStatus["hand_" .. tostring(handed)].location.Y, accessoryStatus["hand_" .. tostring(handed)].location.Z, accessoryStatus["hand_" .. tostring(handed)].rotation.Pitch, accessoryStatus["hand_" .. tostring(handed)].rotation.Yaw, accessoryStatus["hand_" .. tostring(handed)].rotation.Roll)
 					local socketName = markerParams.socket_name or ""
-					--M.print("Attaching hand to socket: " .. tostring(socketName), accessoryParams.attach_type)
-					hand:K2_AttachTo(currentAttachment, uevrUtils.fname_from_string(socketName), markerParams.attach_type or 0, false)
-					uevrUtils.set_component_relative_transform(hand, markerParams.location or {0,0,0}, markerParams.rotation or {0,0,0})
-
+					attachHandToTarget(handed, currentAttachment, socketName, markerParams.attach_type or 0, markerParams.location or {0,0,0}, markerParams.rotation or {0,0,0})
+					uevrUtils.executeUEVRCallbacks("on_accessory_attach", handed, currentAttachment, socketName, markerParams.attach_type or 0, markerParams.location or {0,0,0}, markerParams.rotation or {0,0,0})
+					
 					-- Set grip animation from accessory params
 					local gripAnim = markerParams.grip_animation
 					holdingAttachment[handed] = (gripAnim and gripAnim ~= "") and gripAnim or nil
@@ -1523,7 +1548,7 @@ function M.attachHandToAccessory(handed, accessoryID, useMontageProximity, animI
 					--M.print("Hand is not within activation distance for this accessory.", LogLevel.Warning)
 				end
             end
-        end
+        --end
     end
     --M.print("Accessory ID: " .. tostring(accessoryID) .. " not found for attachment.", LogLevel.Warning)
 end
@@ -1532,30 +1557,30 @@ end
 -- Goal: re-apply current “active_*_accessory” when preview pokes,
 -- even if the GUID didn’t change (so transforms update live).
 local function refreshAccessoryForHand(handed, force)
-    local activeAccessory = nil
-    if handed == Handed.Right then
-        activeAccessory = select(1, executeIsRightAccessoryCallback())
-    else
-        activeAccessory = select(1, executeIsLeftAccessoryCallback())
-    end
+	local activeAccessory = nil
+	if handed == Handed.Right then
+		activeAccessory = select(1, executeIsRightAccessoryCallback())
+	else
+		activeAccessory = select(1, executeIsLeftAccessoryCallback())
+	end
 
-    local key = (handed == Handed.Right) and "activeRightAccessory" or "activeLeftAccessory"
+	local key = (handed == Handed.Right) and "activeRightAccessory" or "activeLeftAccessory"
 
-    if force then
-        -- IMPORTANT: detach first so we restore original state,
-        -- then attach again so it saves original state correctly.
+	if force then
+		-- IMPORTANT: detach first so we restore original state,
+		-- then attach again so it saves original state correctly.
 		--TODO This is ugly to detach, reattach. look for a better way
-        M.attachHandToAccessory(handed, nil)
-        M.attachHandToAccessory(handed, activeAccessory)
-        accessoryStatus[key] = activeAccessory
-        return
-    end
+		M.attachHandToAccessory(handed, nil)
+		M.attachHandToAccessory(handed, activeAccessory)
+		accessoryStatus[key] = activeAccessory
+		return
+	end
 
-    -- Normal behavior (only on change)
-    if activeAccessory ~= accessoryStatus[key] then
-        accessoryStatus[key] = activeAccessory
-        M.attachHandToAccessory(handed, activeAccessory)
-    end
+	-- Normal behavior (only on change)
+	if activeAccessory ~= accessoryStatus[key] then
+		accessoryStatus[key] = activeAccessory
+		M.attachHandToAccessory(handed, activeAccessory)
+	end
 end
 
 uevrUtils.registerUEVRCallback("on_accessory_preview_changed", function(handed, accessoryID, enabled, markerIndex)
@@ -1652,14 +1677,14 @@ end
 
 -- Feed proximity as another "opinion" into the same montage/preview resolution path.
 uevrUtils.registerUEVRCallback("active_left_accessory", function()
-    local id = proximityAccessoryForHand(Handed.Left)
+	local id = proximityAccessoryForHand(Handed.Left)
     if id ~= nil then
         return id, PROXIMITY_ACCESSORY_PRIORITY
     end
 end)
 
 uevrUtils.registerUEVRCallback("active_right_accessory", function()
-    local id = proximityAccessoryForHand(Handed.Right)
+	local id = proximityAccessoryForHand(Handed.Right)
     if id ~= nil then
         return id, PROXIMITY_ACCESSORY_PRIORITY
     end
@@ -1720,7 +1745,7 @@ local function checkSegmentedMontage(montageObject, montageName, label, animInst
 	else
 		local grippedAttachment = attachments.getCurrentGrippedAttachment(Handed.Right)
 		local grippedAttachmentID = attachments.getAttachmentIDFromAttachment(grippedAttachment)
-		local activeRightAccessory, priority = executeIsRightAccessoryCallback()
+				local activeRightAccessory, priority = executeIsRightAccessoryCallback()
 		markerDebugPrint("[MarkerDebug] active_right_accessory returned id=" .. tostring(activeRightAccessory) .. " priority=" .. tostring(priority))
 		if activeRightAccessory ~= nil then
 			local accessoryParams = (grippedAttachmentID ~= nil and grippedAttachmentID ~= "") and accessories.getAccessoryParamsForAttachment(grippedAttachmentID, activeRightAccessory) or nil
