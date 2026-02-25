@@ -493,9 +493,14 @@ function M.initialize(animID, skeletalMeshComponent)
 end
 
 function M.add(animID, skeletalMeshComponent, animationDefinitions)
+	--print("Adding animation definitions for " .. animID, "\n")
 	animations[animID] = {}
 	animations[animID]["component"] = skeletalMeshComponent
 	animations[animID]["definitions"] = animationDefinitions
+end
+
+function M.setComponent(animID, skeletalMeshComponent)
+	animations[animID]["component"] = skeletalMeshComponent
 end
 
 -- function lerpCallback(animID, animName, alpha)

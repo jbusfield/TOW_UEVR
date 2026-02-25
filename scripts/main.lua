@@ -17,6 +17,7 @@ local laser = require('libs/laser')
 local particlesConfigDev = require('libs/config/particles_config_dev')
 local widgetModule = require('libs/widget')
 local ik = require('libs/ik')
+local animation = require('libs/animation')
 
 local flickerFixer = require('libs/flicker_fixer')
 --local dev = require('libs/uevr_dev')
@@ -32,9 +33,12 @@ attachments.setLogLevel(LogLevel.Debug)
 -- --flickerFixer.setLogLevel(LogLevel.Debug)
 -- --hands.setLogLevel(LogLevel.Debug)
 widgetModule.setLogLevel(LogLevel.Debug)
+ik.setLogLevel(LogLevel.Debug)
 
 uevrUtils.setDeveloperMode(true)
 --hands.enableConfigurationTool()
+uevrUtils.profiler:toggle(true)
+
 
 ui.init()
 ui.setRequireWidgetOpenState(true)
@@ -51,6 +55,7 @@ input.init()
 gunstock.showConfiguration()
 scopes.setDefaultPitchOffset(90.0)
 particlesConfigDev.init()
+ik.init()
 --laser.setLaserLengthPercentage(0.0)
 
 --since weapons are attached to the hand sockets for this game
@@ -1030,6 +1035,10 @@ local function getArmsCopy()
 				meshCopy.RelativeLocation.Z = -100
 				meshCopy:SetVisibility(true, true)
 				meshCopy:SetHiddenInGame(false, true)
+
+				animation.setComponent("left_arms", meshCopy)
+				animation.setComponent("right_arms", meshCopy)
+
 			end
 		end
 	end
@@ -1073,9 +1082,11 @@ local ikParameters = {
         end_bone = "l_Hand_JNT",
         end_control_type = ik.ControllerType.LEFT_CONTROLLER,
         end_bone_offset = uevrUtils.vector(-8,0,0),
+		allow_wrist_affects_elbow = false,
         allow_stretch = false,
         start_stretch_ratio = 0.0,
         max_stretch_scale = 0.0,
+		invert_forearm_roll = true,
         wrist_bone = "l_wrist_JNT",
         twist_bones = {
             { bone = "l_lowerTwistUp_JNT",  fraction = 0.25 },
@@ -1085,17 +1096,14 @@ local ikParameters = {
     }
 }
 local ikInstance = nil
--- IK test mesh creation (kept minimal). Uses F7 to avoid clashing with the earlier F2 binding.
 register_key_bind("F2", function()
-	hands.hideHands(true)
+	--hands.hideHands(true)
 
 	ikInstance = ik.new({
 	})
 	ikInstance:setParameters(ikParameters, true)
 	ikInstance:setActive("a323432_ab_434543")
 	ikInstance:setActive("b567788_ab_434543")
-	--ikInstance:activate()
-
 
 	-- local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
 	-- if fpvMesh ~= nil then
@@ -1138,6 +1146,16 @@ register_key_bind("F2", function()
 	-- 		-- end
 	-- 	end
 	-- end
+end)
+
+configui.onUpdate("twist_rotation", function(value)
+	if ikInstance ~= nil then
+		--ikInstance:setSolverParameter("a323432_ab_434543", "baseline_forearm_roll_deg", value.z)
+		--ikInstance:setSolverParameter("b567788_ab_434543", "baseline_forearm_roll_deg", value.z)
+	end
+end)
+register_key_bind("F3", function()
+    uevrUtils.profiler:report()
 end)
 
 function on_pre_engine_tick(engine, delta)
