@@ -148,7 +148,7 @@ local configui = require("libs/configui")
 local controllers = require("libs/controllers")
 local scope = require('libs/scope')
 local laser = require('libs/laser')
-local accessories = require('libs/accessories')
+local accessoriesConfig = require('libs/config/accessories_config_dev')
 
 --local debugger = require("libs/uevr_debug")
 
@@ -394,7 +394,7 @@ function M.addAttachmentOffsetsToConfigUI(configDefinition, m_attachmentOffsets)
 			}
 		)
 
-		local accessoriesWidgets = accessories.getConfigWidgets(name, widgetPrefix .. name .. "_", 300)
+		local accessoriesWidgets = accessoriesConfig.getConfigWidgets(name, widgetPrefix .. name .. "_", 300)
 		for j = 1, #accessoriesWidgets do
 			table.insert(configDefinition[1]["layout"], accessoriesWidgets[j])
 		end
@@ -426,7 +426,7 @@ function M.addAttachmentOffsetsToConfigUI(configDefinition, m_attachmentOffsets)
 
 		scope.createConfigCallbacks(name, widgetPrefix .. name .. "_")
 
-		accessories.createConfigCallbacks(name, widgetPrefix .. name .. "_")
+		accessoriesConfig.createConfigCallbacks(name, widgetPrefix .. name .. "_")
 
 		configui.onUpdate(widgetPrefix .. name .. "_position", function(value)
 			M.updateAttachmentTransform(value, nil, nil, id)
@@ -634,7 +634,7 @@ function M.init(isDeveloperMode, logLevel, m_defaultLocation, m_defaultRotation,
     end
 
 	scope.init()
-	accessories.init(nil, nil, M)
+	accessoriesConfig.init(isDeveloperMode, logLevel, M)
 
     if isDeveloperMode then
 		--backward compatibility

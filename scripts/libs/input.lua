@@ -56,6 +56,7 @@ local aimCameraOverride = nil
 --Normally body yaw only needs to be calculated for one eye only in on_early_calculate_stereo_view_offset
 --but in some cases, like Avowed when climbing, the body yaw needs to be calculated for both eyes or else the eyes desync
 --This flag enables optimizations to skip the second calculation when not needed
+--Also if IK hands are jittery when snap turning or moving your head quickly, try setting this to false
 local optimizeBodyYawCalculations = true
 
 local rxState = 0

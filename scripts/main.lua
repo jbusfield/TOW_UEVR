@@ -56,6 +56,8 @@ gunstock.showConfiguration()
 scopes.setDefaultPitchOffset(90.0)
 particlesConfigDev.init()
 ik.init()
+--This is needed to prevent jittery IK arms
+input.setOptimizeBodyYawCalculations(false)
 --laser.setLaserLengthPercentage(0.0)
 
 --since weapons are attached to the hand sockets for this game
@@ -1159,8 +1161,14 @@ register_key_bind("F3", function()
 	handsHidden = not handsHidden
     hands.hideHands(handsHidden)
 end)
+-- register_key_bind("F4", function()
+--     uevrUtils.profiler:report()
+-- end)
+
 register_key_bind("F4", function()
-    uevrUtils.profiler:report()
+	if ikInstance ~= nil then
+    	ikInstance:printMeshBoneTransforms("a323432_ab_434543")
+	end
 end)
 
 function on_pre_engine_tick(engine, delta)

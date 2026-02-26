@@ -1,6 +1,7 @@
 local uevrUtils = require("libs/uevr_utils")
 local paramModule = require("libs/core/params")
 local controllers = require("libs/controllers")
+local animation = require("libs/animation")
 require("libs/enums/unreal")
 
 local M = {}
@@ -211,6 +212,57 @@ local function executeIsAnimatingFromMeshCallback(...)
 	return uevrUtils.executeUEVRCallbacksWithPriorityBooleanResult("is_hands_animating_from_mesh", table.unpack({...}))
 end
 
+function IK:setInitialTransform(solverId)
+    local activeParams = self.activeSolvers[solverId]
+    if activeParams ~= nil and activeParams.wasAnimating then
+        activeParams.wasAnimating = false
+        local mesh = activeParams.mesh
+        local transforms = activeParams.initialTransforms
+        if transforms and type(transforms) == "table" then
+            --keeping the bones in the same numbered order as the original seems to keep the transforms
+            --being applied in the correct order but I dont know if that is always the case
+            --Applying them out of order results in a destroyed mesh
+            for i, entry in ipairs(transforms) do
+                if entry.boneName and entry.transform then
+                    --print("Re-applying initial transform for bone:", entry.boneName)
+                    local f = uevrUtils.fname_from_string(entry.boneName)
+                    mesh:SetBoneTransformByName(f, entry.transform, EBoneSpaces.ComponentSpace)
+                end
+            end
+            -- for boneName, data in pairs(transforms) do
+            --     if boneName and data then
+            --         print("Re-applying transform for bone:", boneName)
+            --         local f = uevrUtils.fname_from_string(boneName)
+            --         mesh:SetBoneTransformByName(f, data, EBoneSpaces.ComponentSpace)
+            --     end
+            -- end
+        end
+    end
+end
+
+function IK:animateFromMesh(animationMesh)
+    if animationMesh == nil then return end
+    local poseCopied = {}
+    for solverId, activeParams in pairs(self.activeSolvers) do
+        if activeParams then
+            --only copy the pose once per tick
+            if poseCopied[activeParams.mesh] == nil then
+                local success, response = pcall(function()
+                    activeParams.mesh:CopyPoseFromSkeletalComponent(animationMesh)
+                end)
+                if success == false then
+                    --M.print("[hands] " .. response, LogLevel.Error)
+                    print(activeParams.mesh)
+                    print(activeParams.mesh:get_full_name())
+                end
+                poseCopied[activeParams.mesh] = true
+            end
+
+            activeParams.wasAnimating = true
+        end
+    end
+end
+
 function IK:create()
     if UKismetAnimationLibrary == nil then
 		UKismetAnimationLibrary = uevrUtils.find_default_instance("Class /Script/AnimGraphRuntime.KismetAnimationLibrary")
@@ -227,32 +279,23 @@ function IK:create()
     self.activeSolvers = {}
 	-- Register tick callback
 	local tickFn = function(engine, delta)
-        local isLeftAnimating = select(1, executeIsAnimatingFromMeshCallback(Handed.Left))
-		local isRightAnimating = select(1, executeIsAnimatingFromMeshCallback(Handed.Right))
-        if (isLeftAnimating or isRightAnimating) and self.activeSolvers ~= nil then
-            --lots of problems with this still including need to handle left/right
-            -- and shoulders move to the wrong location during and after animation but
-            --kind of works
-            for solverId, activeParams in pairs(self.activeSolvers) do
-                if activeParams then
-                    local success, response = pcall(function()
-                        activeParams.mesh:CopyPoseFromSkeletalComponent(uevrUtils.getValid(pawn, {"FPVMesh"}))
-                    end)
-                    if success == false then
-                        M.print("[hands] " .. response, LogLevel.Error)
-                        print(activeParams.mesh)
-                        print(activeParams.mesh:get_full_name())
-                    end
-                    return
-                end
-            end
-        elseif self.activeSolvers ~= nil then
-            for solverId, activeParams in pairs(self.activeSolvers) do
-                if activeParams then
-                    local solverParams = paramManager:get(solverId)
-                    if solverParams ~= nil then
-                        if solverParams.solver == M.SolverType.TWO_BONE then
-                            self:solveTwoBone(activeParams)
+        if self.activeSolvers ~= nil then
+            local isLeftAnimating = select(1, executeIsAnimatingFromMeshCallback(Handed.Left))
+		    local isRightAnimating = select(1, executeIsAnimatingFromMeshCallback(Handed.Right))
+            if (isLeftAnimating or isRightAnimating) then
+                self:animateFromMesh(uevrUtils.getValid(pawn, {"FPVMesh"}))
+            else
+                for solverId, activeParams in pairs(self.activeSolvers) do
+                    if activeParams then
+                        if activeParams.wasAnimating then
+                            self:setInitialTransform(solverId) --redundently applies to single mesh twice but only happens once at montage end. Still should be better
+                        end
+
+                        local solverParams = paramManager:get(solverId)
+                        if solverParams ~= nil then
+                            if solverParams.solver == M.SolverType.TWO_BONE then
+                                self:solveTwoBone(activeParams)
+                            end
                         end
                     end
                 end
@@ -478,6 +521,38 @@ SafeNormalize = function(v)
 end
 SafeNormalize = uevrUtils.profiler:wrap("SafeNormalize", SafeNormalize)
 
+-- local function getTargetLocationAndRotation(hand, controller)
+--     local loc = nil
+--     local rot = nil
+--     if accessoryStatus[hand] == nil then
+--         loc = controller and controller:K2_GetComponentLocation() or nil
+--         rot = controller and controller:K2_GetComponentRotation() or nil
+--     else
+--         local status = accessoryStatus[hand]
+--         loc = status.parentAttachment:GetSocketLocation(uevrUtils.fname_from_string(status.socketName or ""))
+--         rot = status.parentAttachment:GetSocketRotation(uevrUtils.fname_from_string(status.socketName or ""))
+--         if status.loc ~= nil and status.rot ~= nil then
+--             local offsetPos = uevrUtils.vector(status.loc) or uevrUtils.vector(0,0,0)
+--             local offsetRot = uevrUtils.rotator(status.rot) or uevrUtils.rotator(0,0,0)
+--             --its not clear why this is needed
+--             local temp = offsetRot.Pitch
+--             offsetRot.Pitch = -offsetRot.Roll
+--             offsetRot.Roll = -temp
+
+--             loc = kismet_math_library:Add_VectorVector(loc, kismet_math_library:GreaterGreater_VectorRotator(offsetPos, rot))
+--             rot = kismet_math_library:ComposeRotators(rot, offsetRot)
+--         end
+--         -- = {
+--         --     parentAttachment = parentAttachment,
+--         --     socketName = socketName,
+--         --     attachType = attachType,
+--         --     loc = loc,
+--         --     rot = rot,
+--         -- }
+--     end
+--     return loc, rot
+-- end
+
 local function getTargetLocationAndRotation(hand, controller)
     local loc = nil
     local rot = nil
@@ -491,21 +566,10 @@ local function getTargetLocationAndRotation(hand, controller)
         if status.loc ~= nil and status.rot ~= nil then
             local offsetPos = uevrUtils.vector(status.loc) or uevrUtils.vector(0,0,0)
             local offsetRot = uevrUtils.rotator(status.rot) or uevrUtils.rotator(0,0,0)
-            --its not clear why this is needed
-            local temp = offsetRot.Pitch
-            offsetRot.Pitch = -offsetRot.Roll
-            offsetRot.Roll = -temp
 
             loc = kismet_math_library:Add_VectorVector(loc, kismet_math_library:GreaterGreater_VectorRotator(offsetPos, rot))
-            rot = kismet_math_library:ComposeRotators(rot, offsetRot)
+            rot = kismet_math_library:ComposeRotators(offsetRot, rot)
         end
-        -- = {
-        --     parentAttachment = parentAttachment,
-        --     socketName = socketName,
-        --     attachType = attachType,
-        --     loc = loc,
-        --     rot = rot,
-        -- }
     end
     return loc, rot
 end
@@ -540,10 +604,10 @@ function IK:solveTwoBone(solverParams)
     local allowWristAffectsElbow = solverParams.allowWristAffectsElbow
     local invertForearmRoll = solverParams.invertForearmRoll
 	local state = solverParams.state
-	if state == nil then
-		state = newIKState()
-		solverParams.state = state
-	end
+	-- if state == nil then
+	-- 	state = newIKState()
+	-- 	solverParams.state = state
+	-- end
     VEC_UNIT_Y = invertForearmRoll == true and VEC_UNIT_Y_INVERSE or VEC_UNIT_Y_FORWARD
 
 
@@ -837,6 +901,61 @@ function IK:solveTwoBone(solverParams)
 end
 IK.solveTwoBone = uevrUtils.profiler:wrap("solveTwoBone", IK.solveTwoBone)
 
+-- Print all bone transforms in bone-local space for a mesh/component
+function M.printMeshBoneTransforms(mesh, boneSpace)
+	if mesh == nil or uevrUtils.validate_object(mesh) == nil then
+		M.print("printMeshBoneTransforms: mesh is nil or invalid", LogLevel.Warning)
+		return
+	end
+	boneSpace = boneSpace or 0
+	local boneNames = uevrUtils.getBoneNames(mesh)
+	for i, bname in ipairs(boneNames) do
+		local f = uevrUtils.fname_from_string(bname)
+		local localRot, localLoc, localScale = nil, nil, nil
+		-- animation.getBoneSpaceLocalTransform returns (rot, loc, scale, parentTransform)
+		if animation and animation.getBoneSpaceLocalTransform then
+			localRot, localLoc, localScale = animation.getBoneSpaceLocalTransform(mesh, f, boneSpace)
+		end
+		if localRot == nil then
+			-- fallback: compute via component transforms
+			local parentTransform = mesh:GetBoneTransformByName(mesh:GetParentBone(f), boneSpace)
+			local wTransform = mesh:GetBoneTransformByName(f, boneSpace)
+			local localTransform = kismet_math_library:ComposeTransforms(wTransform, kismet_math_library:InvertTransform(parentTransform))
+			localLoc = uevrUtils.vector(0,0,0)
+			local localRotTmp = uevrUtils.rotator(0,0,0)
+			local localScaleTmp = uevrUtils.vector(0,0,0)
+			kismet_math_library:BreakTransform(localTransform, localLoc, localRotTmp, localScaleTmp)
+			localRot = kismet_math_library:TransformRotation(localTransform, uevrUtils.rotator(0,0,0))
+			localScale = localScaleTmp or wTransform.Scale3D
+		end
+
+		if localLoc ~= nil and localRot ~= nil then
+			M.print(string.format("%s: Loc=(%.3f,%.3f,%.3f) Rot=(%.3f,%.3f,%.3f) Scale=(%.3f,%.3f,%.3f)",
+				bname,
+				(localLoc.X or localLoc[1] or 0), (localLoc.Y or localLoc[2] or 0), (localLoc.Z or localLoc[3] or 0),
+				(localRot.Pitch or localRot.pitch or 0), (localRot.Yaw or localRot.yaw or 0), (localRot.Roll or localRot.roll or 0),
+				(localScale and (localScale.X or localScale[1] or 0) or 0), (localScale and (localScale.Y or localScale[2] or 0) or 0), (localScale and (localScale.Z or localScale[3] or 0) or 0)
+			), LogLevel.Info)
+		else
+			M.print(tostring(bname) .. ": <could not resolve local transform>", LogLevel.Warning)
+		end
+	end
+end
+
+function IK:printMeshBoneTransforms(solverID)
+    local solverParams = paramManager:get(solverID)
+    if solverParams == nil then
+        M.print("printMeshBoneTransforms: no solver params for solverID " .. tostring(solverID), LogLevel.Warning)
+        return
+    end
+    local mesh = solverParams.mesh == "Custom" and getCustomIKComponent(solverID) or uevrUtils.getObjectFromDescriptor(solverParams.mesh, false)
+    if mesh == nil then
+        M.print("printMeshBoneTransforms: could not resolve mesh for solverID " .. tostring(solverID), LogLevel.Warning)
+        return
+    end
+    M.printMeshBoneTransforms(mesh, EBoneSpaces.ComponentSpace)
+end
+
 function IK:setActive(solverId, value)
     if value == nil then value = true end
     self.activeSolvers = self.activeSolvers or {}
@@ -896,6 +1015,30 @@ function IK:setActive(solverId, value)
 					end
 				end
 			end
+
+            local initialTransforms = {}
+            local boneNames = uevrUtils.getBoneNames(mesh)
+            for i, boneName in ipairs(boneNames) do
+                local f = uevrUtils.fname_from_string(boneName)
+                table.insert(initialTransforms, {boneName = boneName, transform = mesh:GetBoneTransformByName(f, EBoneSpaces.ComponentSpace)})
+            end
+            active.initialTransforms = initialTransforms
+
+			-- -- Capture ancestor bones (shoulder->root) local transforms for later use.
+			-- -- Get full ancestor chain from end bone and use indices 4..end as requested.
+			-- local ancestors = getAncestorBones(mesh, solverParams["end_bone"], 100)
+			-- local ancestorLocalTransforms = {}
+			-- if ancestors ~= nil and #ancestors >= 4 then
+			-- 	for idx = 4, #ancestors do
+			-- 		local boneName = ancestors[idx]
+            --         if boneName == "None" then break end
+			-- 		if boneName ~= nil then
+			-- 			local f = uevrUtils.fname_from_string(boneName)
+            --             ancestorLocalTransforms[boneName] = mesh:GetBoneTransformByName(f, EBoneSpaces.ComponentSpace)
+			-- 		end
+			-- 	end
+			-- end
+			-- active.ancestorLocalTransforms = ancestorLocalTransforms
         end
     end
 end
@@ -988,9 +1131,14 @@ uevrUtils.registerUEVRCallback("on_accessory_attach", function(handed, parentAtt
         rot = rot,
     }
 end)
+
 uevrUtils.registerUEVRCallback("on_accessory_detach", function(handed)
 	accessoryStatus = accessoryStatus or {}
     accessoryStatus[handed] = nil
+end)
+
+uevrUtils.registerUEVRCallback("on_accessory_animation", function(handed, anim)
+
 end)
 
 return M
