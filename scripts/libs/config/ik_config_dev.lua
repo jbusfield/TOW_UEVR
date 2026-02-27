@@ -35,6 +35,9 @@ local configDefaults = {
     wrist_bone = "",
     twist_bones = {},
     invert_forearm_roll = false,
+    animation_mesh = "",
+    animation_location_offset = uevrUtils.vector(0,0,0),
+    animation_rotation_offset = uevrUtils.rotator(0,0,0),
 }
 
 local meshList = {}
@@ -175,6 +178,37 @@ local function getConfigWidgets(m_paramManager)
 					range = {0, 5},
 					initialValue = 0.0
 				},
+				{
+					widgetType = "combo",
+					id = widgetPrefix .. "animation_mesh_combo",
+					label = "Animation Mesh",
+					selections = {"None"},
+					initialValue = 1,
+                    width = 263
+				},
+                { widgetType = "same_line" },
+				{
+					widgetType = "checkbox",
+					id = widgetPrefix .. "animation_mesh_combo_show_children",
+					label = "Show Children",
+					initialValue = false
+				},
+				{
+					widgetType = "drag_float3",
+					id = widgetPrefix .. "animation_location_offset",
+					label = "Animation Location Offset",
+					speed = 0.1,
+					range = {-100, 100},
+					initialValue = {0,0,0}
+				},
+				{
+					widgetType = "drag_float3",
+					id = widgetPrefix .. "animation_rotation_offset",
+					label = "Animation Rotation Offset",
+					speed = 1,
+					range = {-360, 360},
+					initialValue = {0,0,0}
+				},
 				{ widgetType = "new_line" },
 				{
 					widgetType = "text",
@@ -306,8 +340,6 @@ local function updateUI(params)
         elseif key == "end_control_type" then
             local selectedIndex = value == M.ControllerType.LEFT_CONTROLLER and 1 or 2
             configui.setValue(widgetPrefix .. key, selectedIndex, true)
-        -- elseif key == "end_bone_offset" then
-        --     configui.setValue(widgetPrefix .. key, {value.X, value.Y, value.Z}, true)
         else
 		    setUIValue(key, value)
         end
@@ -338,7 +370,7 @@ function M.showConfiguration(saveFileName, options)
 
 end
 
-local function setSelectedMesh(currentMeshName, noCallbacks)
+local function setSelectedMesh(currentMeshName, meshID, noCallbacks)
 	local selectedIndex = 1
 	for i = 1, #meshList do
 		if meshList[i] == currentMeshName then
@@ -346,7 +378,7 @@ local function setSelectedMesh(currentMeshName, noCallbacks)
 			break
 		end
 	end
-	configui.setValue(widgetPrefix .. "mesh_combo", selectedIndex, noCallbacks)
+	configui.setValue(widgetPrefix .. meshID, selectedIndex, noCallbacks)
 end
 
 local function setMeshList(currentMeshName, noCallbacks)
@@ -355,7 +387,16 @@ local function setMeshList(currentMeshName, noCallbacks)
 	table.insert(meshList, "Custom")
 
 	configui.setSelections(widgetPrefix .. "mesh_combo", meshList)
-	setSelectedMesh(currentMeshName, noCallbacks)
+	setSelectedMesh(currentMeshName, "mesh_combo", noCallbacks)
+end
+
+local function setAnimationMeshList(currentMeshName, noCallbacks)
+    meshList = uevrUtils.getObjectPropertyDescriptors(pawn, "Pawn", "Class /Script/Engine.SkeletalMeshComponent", configui.getValue(widgetPrefix .. "animation_mesh_combo_show_children"))
+	table.insert(meshList, 1, "None")
+	table.insert(meshList, "Custom")
+
+	configui.setSelections(widgetPrefix .. "animation_mesh_combo", meshList)
+	setSelectedMesh(currentMeshName, "animation_mesh_combo", noCallbacks)
 end
 
 local function setSelectedBone(comboWidgetID, valueWidgetID)
@@ -419,6 +460,7 @@ function M.init(m_paramManager)
 	paramManager:initProfileHandler(widgetPrefix, function(profileParams)
 		updateUI(profileParams)
         setMeshList(profileParams["mesh"], true)
+        setAnimationMeshList(profileParams["animation_mesh"], true)
         setBoneList()
 	end)
 end
@@ -434,6 +476,14 @@ end)
 configui.onUpdate(widgetPrefix .. "mesh_combo", function(value)
     updateSetting("mesh", meshList[value] == "None" and "" or meshList[value])
     setBoneList()
+end)
+
+configui.onCreateOrUpdate(widgetPrefix .. "animation_mesh_combo_show_children", function(value)
+    setAnimationMeshList(configui.getValue(widgetPrefix .. "animation_mesh"), true)
+end)
+
+configui.onUpdate(widgetPrefix .. "animation_mesh_combo", function(value)
+    updateSetting("animation_mesh", meshList[value] == "None" and "" or meshList[value])
 end)
 
 configui.onUpdate(widgetPrefix .. "end_bone_combo", function(value)

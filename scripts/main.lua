@@ -57,13 +57,14 @@ scopes.setDefaultPitchOffset(90.0)
 particlesConfigDev.init()
 ik.init()
 --This is needed to prevent jittery IK arms
-input.setOptimizeBodyYawCalculations(false)
+--input.setOptimizeBodyYawCalculations(true)
 --laser.setLaserLengthPercentage(0.0)
 
 --since weapons are attached to the hand sockets for this game
 --only let the hands be affected by gunstock offsets
 attachments.setGunstockOffsetsEnabled(false)
 hands.setGunstockOffsetsEnabled(true)
+ik.setGunstockOffsetsEnabled(true)
 
 local settings = {}
 local meshCopy = nil
@@ -247,6 +248,7 @@ attachments.registerOnGripUpdateCallback(function()
 end)
 
 function on_level_change(level)
+	meshCopy = nil
 	--print("Level changed\n")
 	flickerFixer.create()
 	setIdleCameraTimeout()
@@ -1037,6 +1039,7 @@ local function getArmsCopy()
 				meshCopy.RelativeLocation.Z = -100
 				meshCopy:SetVisibility(true, true)
 				meshCopy:SetHiddenInGame(false, true)
+				meshCopy.BoundsScale = 16.0
 
 				animation.setComponent("left_arms", meshCopy)
 				animation.setComponent("right_arms", meshCopy)

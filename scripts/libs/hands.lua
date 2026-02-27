@@ -136,6 +136,7 @@ local animation = require("libs/animation")
 local attachments = require("libs/attachments")
 local accessoriesConfig = require("libs/config/accessories_config_dev")
 local pawnModule = require("libs/pawn")
+require("libs/accessories")
 
 local M = {}
 
@@ -166,7 +167,6 @@ local status = {}
 local accessoryStatus = {}
 
 local gunstockOffsetsEnabled = false
-
 function M.setGunstockOffsetsEnabled(val)
 	gunstockOffsetsEnabled = val
 end
@@ -582,6 +582,7 @@ function M.updateAnimationFromMesh(hand, mesh, componentName)
 				if jointName ~= nil and jointName ~= "" then
 					local success, response = pcall(function()
 						component:CopyPoseFromSkeletalComponent(mesh)
+						--print("here", component:get_full_name())
 						--component:SetLeaderPoseComponent(mesh, true)
 						local location = getValidVector(definition, "Location", {0,0,0})
 						local rotation = getValidRotator(definition, "Rotation", {0,0,0})
@@ -905,8 +906,8 @@ function M.setFingerAngles(fingerIndex, jointIndex, angleID, angle, componentNam
 end
 
 uevrUtils.registerUEVRCallback("gunstock_transform_change", function(id, newLocation, newRotation, newOffhandLocationOffset)
-	if status["offhandOffset"] == nil then status["offhandOffset"] = {} end
-	status["offhandOffset"][id] = newOffhandLocationOffset
+	-- if status["offhandOffset"] == nil then status["offhandOffset"] = {} end
+	-- status["offhandOffset"][id] = newOffhandLocationOffset
 	--print("gunstock_transform_change callback received for id: ", id, newOffhandLocationOffset.X, newOffhandLocationOffset.Y, newOffhandLocationOffset.Z, status["offhandOffset"])
 
 	-- local initialRotation = uevrUtils.rotator(0,0,0)
@@ -1257,7 +1258,7 @@ end)
 -- Hand-specific attachment helpers (keep hand-level logic in this file)
 local function saveHandSnapshot(handed, statusKey)
 	local handObj = M.getHandComponent(handed)
-	if handObj == nil then return end
+	if uevrUtils.getValid(handObj) == nil then return end
 	accessoryStatus[statusKey] = {
 		parent = handObj.AttachParent,
 		socket = (handObj.AttachSocketName and handObj.AttachSocketName:to_string()) or "",
@@ -1269,6 +1270,7 @@ end
 local function restoreHandSnapshot(handed)
 	local statusKey = "hand_" .. tostring(handed)
 	local handObj = M.getHandComponent(handed)
+	if uevrUtils.getValid(handObj) == nil then return end
 	local s = accessoryStatus[statusKey]
 	if handObj ~= nil and s ~= nil and handObj.K2_AttachTo ~= nil then
 		local parent = s.parent
@@ -1285,7 +1287,7 @@ end
 
 local function attachHandToTarget(handed, parentAttachment, socketName, attachType, loc, rot)
 	local handObj = M.getHandComponent(handed)
-	if handObj == nil then return end
+	if uevrUtils.getValid(handObj) == nil then return end
 	local statusKey = "hand_" .. tostring(handed)
 	if accessoryStatus[statusKey] == nil then
 		saveHandSnapshot(handed, statusKey)

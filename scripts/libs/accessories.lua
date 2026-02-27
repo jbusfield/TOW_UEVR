@@ -1,7 +1,7 @@
 local uevrUtils = require("libs/uevr_utils")
 local controllers = require("libs/controllers")
 local attachments = require("libs/attachments")
-local paramModule = require("libs/core/params")
+--local paramModule = require("libs/core/params")
 local accessoriesConfigDev = require("libs/config/accessories_config_dev")
 
 local M = {}
@@ -723,6 +723,12 @@ uevrUtils.registerPreLevelChangeCallback(function(level)
 	accessoryStatus = {}
 	status = {}
 end)
+
+uevrUtils.registerUEVRCallback("gunstock_transform_change", function(id, newLocation, newRotation, newOffhandLocationOffset)
+	if status["offhandOffset"] == nil then status["offhandOffset"] = {} end
+	status["offhandOffset"][id] = newOffhandLocationOffset
+end)
+
 
 -- Passing these functions through but modules can also just call accessories_config_dev directly.
 function M.init(isDeveloperMode, logLevel, caller)

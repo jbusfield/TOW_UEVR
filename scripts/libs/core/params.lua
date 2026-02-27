@@ -348,7 +348,7 @@ end
 --local profileIDs = {}
 function M:updateProfileUI(noCallbacks)
 	local ids, names, current = self:getProfiles()
-    print("Updating profile UI with profiles:", ids, names, current)
+    --print("Updating profile UI with profiles:", ids, names, current)
 	self.profileIDs = ids
 	configui.setSelections(self.widgetPrefix .. "active_profile", names)
 	configui.setValue(self.widgetPrefix .. "active_profile", current, noCallbacks)
