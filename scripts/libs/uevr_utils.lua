@@ -783,6 +783,18 @@ Usage
 --Find orphaned prints: ^[^-]*[^.\w]print\(
 
 require("libs/enums/unreal")
+local coreLerp = require("libs/core/lerp")
+-- TArray Support ----------------
+local tArrayExists, tArray = pcall(require, "libs/core/tarray")
+if tArrayExists == false then tArray = nil end
+local function checkTArrayExists()
+	if tArray == nil then
+		print("TArray module not loaded. Ensure libs/core/tarray.lua exists and the tarray_helper.dll file is in the plugins folder")
+	end
+	return tArray ~= nil
+end
+---------------------------------
+
 -------------------------------
 -- Globals
 --  These exist for backwards compatability with existing scripts 
@@ -950,7 +962,6 @@ KeyName = {
 	PS4_Special = "PS4_Special"
 }
 -------------------------------
-local coreLerp = require("libs/core/lerp")
 
 local M = {}
 
@@ -2376,16 +2387,6 @@ function M.getAllActorsOfClass(className)
 	return actors
 end
 
--- TArray Support ----------------
-local tArrayExists, tArray = pcall(require, "libs/core/tarray")
-if tArrayExists == false then tArray = nil end
-local function checkTArrayExists()
-	if tArray == nil then
-		M.print("TArray module not loaded. Ensure libs/core/tarray.lua exists and the tarray_helper.dll file is in the plugins folder", LogLevel.Error)
-	end
-	return tArray ~= nil
-end
----------------------------------
 
 function M.getSocketNames(object, callback)
 ---@diagnostic disable-next-line: need-check-nil

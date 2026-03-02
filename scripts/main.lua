@@ -1035,8 +1035,6 @@ local function getArmsCopy()
 			if meshCopy ~= nil then
 				uevrUtils.fixMeshFOV(meshCopy, "ForegroundPriorityEnabled", 0.0, true, true, false)
 				meshCopy:K2_AttachTo(pawn.RootComponent, uevrUtils.fname_from_string(""), 0, false)
-				meshCopy.RelativeLocation.X = -10
-				meshCopy.RelativeLocation.Z = -100
 				meshCopy:SetVisibility(true, true)
 				meshCopy:SetHiddenInGame(false, true)
 				meshCopy.BoundsScale = 16.0
@@ -1059,46 +1057,51 @@ function getCustomHandComponent(key)
 end
 
 local ikParameters = {
-    a323432_ab_434543 = {
-        label = "Arms Only Right",
-        --mesh = "Pawn.FPVMesh",
-        mesh = "Custom",
-        solver = ik.SolverType.TWO_BONE,
-        end_bone = "r_Hand_JNT",
-        end_control_type = ik.ControllerType.RIGHT_CONTROLLER,
-        end_bone_offset = uevrUtils.vector(-8,0,0),
-        end_bone_rotation = uevrUtils.rotator(0,0,180),
-		allow_wrist_affects_elbow = false,
-        allow_stretch = false,
-        start_stretch_ratio = 0.0,
-        max_stretch_scale = 0.0,
-        wrist_bone = "r_wrist_JNT",
-        twist_bones = {
-            { bone = "r_lowerTwistUp_JNT",  fraction = 0.25 },
-            { bone = "r_lowerTwistMid_JNT", fraction = 0.50 },
-            { bone = "r_lowerTwistLow_JNT", fraction = 0.75 },
-        },
-    },
-    b567788_ab_434543 = {
-        label = "Arms Only Left",
-        --mesh = "Pawn.FPVMesh",
-        mesh = "Custom",
-        solver = ik.SolverType.TWO_BONE,
-        end_bone = "l_Hand_JNT",
-        end_control_type = ik.ControllerType.LEFT_CONTROLLER,
-        end_bone_offset = uevrUtils.vector(-8,0,0),
-		allow_wrist_affects_elbow = false,
-        allow_stretch = false,
-        start_stretch_ratio = 0.0,
-        max_stretch_scale = 0.0,
-		invert_forearm_roll = true,
-        wrist_bone = "l_wrist_JNT",
-        twist_bones = {
-            { bone = "l_lowerTwistUp_JNT",  fraction = 0.25 },
-            { bone = "l_lowerTwistMid_JNT", fraction = 0.50 },
-            { bone = "l_lowerTwistLow_JNT", fraction = 0.75 },
-        },
-    }
+	mesh = "Custom",
+	animation_mesh = "",
+	animation_location_offset = uevrUtils.vector(0,0,0),
+    animation_rotation_offset = uevrUtils.rotator(0,0,0),
+	solvers = {
+		a323432_ab_434543 = {
+			label = "Arms Only Right",
+			solver_type = ik.SolverType.TWO_BONE,
+			end_bone = "r_Hand_JNT",
+			end_control_type = ik.ControllerType.RIGHT_CONTROLLER,
+			end_bone_offset = uevrUtils.vector(-8,0,0),
+			end_bone_rotation = uevrUtils.rotator(0,0,180),
+			allow_wrist_affects_elbow = false,
+			allow_stretch = false,
+			start_stretch_ratio = 0.0,
+			max_stretch_scale = 0.0,
+			wrist_bone = "r_wrist_JNT",
+			twist_bones = {
+				{ bone = "r_lowerTwistUp_JNT",  fraction = 0.25 },
+				{ bone = "r_lowerTwistMid_JNT", fraction = 0.50 },
+				{ bone = "r_lowerTwistLow_JNT", fraction = 0.75 },
+			},
+			sort_order = 1,
+		},
+		b567788_ab_434543 = {
+			label = "Arms Only Left",
+			--mesh = "Pawn.FPVMesh",
+			solver_type = ik.SolverType.TWO_BONE,
+			end_bone = "l_Hand_JNT",
+			end_control_type = ik.ControllerType.LEFT_CONTROLLER,
+			end_bone_offset = uevrUtils.vector(-8,0,0),
+			allow_wrist_affects_elbow = false,
+			allow_stretch = false,
+			start_stretch_ratio = 0.0,
+			max_stretch_scale = 0.0,
+			invert_forearm_roll = true,
+			wrist_bone = "l_wrist_JNT",
+			twist_bones = {
+				{ bone = "l_lowerTwistUp_JNT",  fraction = 0.25 },
+				{ bone = "l_lowerTwistMid_JNT", fraction = 0.50 },
+				{ bone = "l_lowerTwistLow_JNT", fraction = 0.75 },
+			},
+			sort_order = 2,
+		}
+	}
 }
 local ikInstance = nil
 register_key_bind("F2", function()

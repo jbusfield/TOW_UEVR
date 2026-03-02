@@ -20,11 +20,20 @@ local configTabLabel = "IK Dev Config"
 local widgetPrefix = "uevr_ik_"
 
 local paramManager = nil
-local configDefaults = {
-    label = "",
+local rigDefaults = {
     mesh = "",
-    solver = M.SolverType.TWO_BONE,
+	mesh_location_offset = uevrUtils.vector(0,0,0),
+	mesh_rotation_offset = uevrUtils.rotator(0,0,0),
+	animation_mesh = "",
+	animation_location_offset = uevrUtils.vector(0,0,0),
+	animation_rotation_offset = uevrUtils.rotator(0,0,0),
+}
+local solverDefaults = {
+	label = "",
+	solver_type = M.SolverType.TWO_BONE,
     end_bone = "",
+	joint_bone = "",
+	start_bone = "",
     end_control_type = M.ControllerType.RIGHT_CONTROLLER,
     end_bone_offset = uevrUtils.vector(0,0,0),
     end_bone_rotation = uevrUtils.rotator(0,0,0),
@@ -34,16 +43,17 @@ local configDefaults = {
     max_stretch_scale = 0.0,
     wrist_bone = "",
     twist_bones = {},
-    invert_forearm_roll = false,
-    animation_mesh = "",
-    animation_location_offset = uevrUtils.vector(0,0,0),
-    animation_rotation_offset = uevrUtils.rotator(0,0,0),
+    --invert_forearm_roll = false,
+	sort_order = 0,
 }
 
 local meshList = {}
 local boneNames = {}
+local solverIds = {}
+local selectedSolverId = nil
+local solverNames = {}
 
-local helpText = "Developer IK configuration. Edit individual solver parameter sets per profile."
+local helpText = "Developer IK configuration. Profiles are rigs; each rig has mesh/animation settings plus nested solvers."
 
 local function getConfigWidgets(m_paramManager)
     local hideLabels = true
@@ -53,37 +63,135 @@ local function getConfigWidgets(m_paramManager)
 			widgetType = "tree_node",
 			id = widgetPrefix .. "ik_tree",
 			initialOpen = true,
-			label = "IK Parameters"
+			label = "Rig Settings"
 		},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "label",
-					label = "Label",
-					initialValue = "",
-					width = 300,
-                    isHidden = true
-				},
+            {
+                widgetType = "input_text",
+                id = widgetPrefix .. "label",
+                label = "Label",
+                initialValue = "",
+                width = 300,
+                isHidden = true
+            },
+            {
+                widgetType = "combo",
+                id = widgetPrefix .. "mesh_combo",
+                label = "Mesh",
+                selections = {"None"},
+                initialValue = 1,
+                width = 263
+            },
+            { widgetType = "same_line" },
+            {
+                widgetType = "checkbox",
+                id = widgetPrefix .. "mesh_combo_show_children",
+                label = "Show Children",
+                initialValue = false
+            },
+            {
+                widgetType = "input_text",
+                id = widgetPrefix .. "mesh",
+                label = "Mesh",
+                initialValue = "",
+                isHidden = hideLabels
+            },
+            {
+                widgetType = "drag_float3",
+                id = widgetPrefix .. "mesh_location_offset",
+                label = "Location",
+                speed = 0.1,
+                range = {-100, 100},
+                initialValue = {0,0,0}
+            },
+            {
+                widgetType = "drag_float3",
+                id = widgetPrefix .. "mesh_rotation_offset",
+                label = "Rotation",
+                speed = 1,
+                range = {-360, 360},
+                initialValue = {0,0,0}
+            },
+            {
+                widgetType = "tree_node",
+                id = widgetPrefix .. "animation_tree",
+                initialOpen = false,
+                label = "Animation"
+            },
+                {
+                    widgetType = "combo",
+                    id = widgetPrefix .. "animation_mesh_combo",
+                    label = "Animation Mesh",
+                    selections = {"None"},
+                    initialValue = 1,
+                    width = 263
+                },
+                { widgetType = "same_line" },
+                {
+                    widgetType = "checkbox",
+                    id = widgetPrefix .. "animation_mesh_combo_show_children",
+                    label = "Show Children",
+                    initialValue = false
+                },
+                {
+                    widgetType = "drag_float3",
+                    id = widgetPrefix .. "animation_location_offset",
+                    label = "Animation Location",
+                    speed = 0.1,
+                    range = {-100, 100},
+                    initialValue = {0,0,0}
+                },
+                {
+                    widgetType = "drag_float3",
+                    id = widgetPrefix .. "animation_rotation_offset",
+                    label = "Animation Rotation",
+                    speed = 1,
+                    range = {-360, 360},
+                    initialValue = {0,0,0}
+                },
+            { widgetType = "tree_pop" },
+            {
+                widgetType = "tree_node",
+                id = widgetPrefix .. "solvers_tree",
+                initialOpen = true,
+                label = "Solvers"
+            },
 				{
 					widgetType = "combo",
-					id = widgetPrefix .. "mesh_combo",
-					label = "Mesh",
+					id = widgetPrefix .. "solver_select",
+					label = "Solver",
 					selections = {"None"},
 					initialValue = 1,
-                    width = 263
+					width = 300
 				},
-                { widgetType = "same_line" },
+				{ widgetType = "same_line" },
 				{
-					widgetType = "checkbox",
-					id = widgetPrefix .. "mesh_combo_show_children",
-					label = "Show Children",
-					initialValue = false
+					widgetType = "button",
+					id = widgetPrefix .. "solver_new",
+					label = "New"
 				},
+				{ widgetType = "same_line" },
 				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "mesh",
-					label = "Mesh",
-					initialValue = "",
-                    isHidden = hideLabels
+					widgetType = "button",
+					id = widgetPrefix .. "solver_duplicate",
+					label = "Duplicate"
+				},
+				{ widgetType = "same_line" },
+				{
+					widgetType = "button",
+					id = widgetPrefix .. "solver_delete",
+					label = "Delete"
+				},
+				{ widgetType = "same_line" },
+				{
+					widgetType = "button",
+					id = widgetPrefix .. "solver_move_up",
+					label = "^"
+				},
+				{ widgetType = "same_line" },
+				{
+					widgetType = "button",
+					id = widgetPrefix .. "solver_move_down",
+					label = "v"
 				},
 				{
 					widgetType = "combo",
@@ -131,6 +239,34 @@ local function getConfigWidgets(m_paramManager)
 				},
 				{
 					widgetType = "combo",
+					id = widgetPrefix .. "joint_bone_combo",
+					label = "Forearm Bone",
+					selections = {"None"},
+					initialValue = 1,
+				},
+				{
+					widgetType = "input_text",
+					id = widgetPrefix .. "joint_bone",
+					label = "Forearm Bone",
+					initialValue = "",
+                    isHidden = hideLabels
+				},
+				{
+					widgetType = "combo",
+					id = widgetPrefix .. "start_bone_combo",
+					label = "Upper Arm Bone",
+					selections = {"None"},
+					initialValue = 1,
+				},
+				{
+					widgetType = "input_text",
+					id = widgetPrefix .. "start_bone",
+					label = "Upper Arm Bone",
+					initialValue = "",
+                    isHidden = hideLabels
+				},
+				{
+					widgetType = "combo",
 					id = widgetPrefix .. "wrist_bone_combo",
 					label = "Wrist Bone",
 					selections = {"None"},
@@ -144,12 +280,12 @@ local function getConfigWidgets(m_paramManager)
 					width = 300,
                     isHidden = hideLabels
 				},
-				{
-					widgetType = "checkbox",
-					id = widgetPrefix .. "invert_forearm_roll",
-					label = "Invert Forearm Roll",
-					initialValue = false
-				},
+				-- {
+				-- 	widgetType = "checkbox",
+				-- 	id = widgetPrefix .. "invert_forearm_roll",
+				-- 	label = "Invert Forearm Roll",
+				-- 	initialValue = false
+				-- },
 				{
 					widgetType = "checkbox",
 					id = widgetPrefix .. "allow_wrist_affects_elbow",
@@ -179,35 +315,12 @@ local function getConfigWidgets(m_paramManager)
 					initialValue = 0.0
 				},
 				{
-					widgetType = "combo",
-					id = widgetPrefix .. "animation_mesh_combo",
-					label = "Animation Mesh",
-					selections = {"None"},
-					initialValue = 1,
-                    width = 263
-				},
-                { widgetType = "same_line" },
-				{
-					widgetType = "checkbox",
-					id = widgetPrefix .. "animation_mesh_combo_show_children",
-					label = "Show Children",
-					initialValue = false
-				},
-				{
-					widgetType = "drag_float3",
-					id = widgetPrefix .. "animation_location_offset",
-					label = "Animation Location Offset",
-					speed = 0.1,
-					range = {-100, 100},
-					initialValue = {0,0,0}
-				},
-				{
-					widgetType = "drag_float3",
-					id = widgetPrefix .. "animation_rotation_offset",
-					label = "Animation Rotation Offset",
-					speed = 1,
-					range = {-360, 360},
-					initialValue = {0,0,0}
+					widgetType = "slider_int",
+					id = widgetPrefix .. "sort_order",
+					label = "Sort Order",
+					range = {0, 100},
+					initialValue = 0,
+                    isHidden = true
 				},
 				{ widgetType = "new_line" },
 				{
@@ -294,6 +407,9 @@ local function getConfigWidgets(m_paramManager)
 					initialValue = 0.75,
 					width = 80
 				},
+            {
+                widgetType = "tree_pop"
+            },
 		{
 			widgetType = "tree_pop"
 		},
@@ -318,31 +434,192 @@ local function getConfigWidgets(m_paramManager)
 	}
 end
 
-local function updateSetting(key, value)
-    if key == "end_control_type" then
-        value = value == 1 and M.ControllerType.LEFT_CONTROLLER or M.ControllerType.RIGHT_CONTROLLER
-    end
-	uevrUtils.executeUEVRCallbacks("on_ik_config_param_change", key, value, true)
+local function getActiveRigParams()
+	return paramManager and paramManager:getAllActiveProfileParams() or {}
+end
+
+local function getSelectedSolverParams(rigParams)
+	rigParams = rigParams or {}
+	local solvers = rigParams.solvers or {}
+	if selectedSolverId == nil or solvers[selectedSolverId] == nil then
+		selectedSolverId = solverIds[1]
+	end
+	if selectedSolverId == nil then return {} end
+	return solvers[selectedSolverId] or {}
 end
 
 local function setUIValue(key, value)
-    configui.setValue(widgetPrefix .. key, value, true)
+	configui.setValue(widgetPrefix .. key, value, true)
 end
 
-local function updateUI(params)
-	for key, value in pairs(params or {}) do
-        if key == "twist_bones" then
-            for i = 1,3 do
-                local twistBone = value[i] or {}
-                setUIValue("lower_twist_bone_" .. i, twistBone.bone or "")
-                setUIValue("lower_twist_bone_frac_" .. i, twistBone.fraction or 0.0)
-            end
-        elseif key == "end_control_type" then
-            local selectedIndex = value == M.ControllerType.LEFT_CONTROLLER and 1 or 2
-            configui.setValue(widgetPrefix .. key, selectedIndex, true)
-        else
-		    setUIValue(key, value)
-        end
+local function getActiveProfileId()
+	return paramManager and paramManager:getActiveProfile() or nil
+end
+
+local function pmGet(key)
+	if paramManager ~= nil and paramManager.get ~= nil then
+		return paramManager:get(key)
+	end
+	return nil
+end
+
+local function pmSet(key, value, persist)
+	if paramManager ~= nil and paramManager.set ~= nil then
+		paramManager:set(key, value, persist)
+	end
+end
+
+local function getActiveSolversTable(createIfMissing)
+	local profileId = getActiveProfileId()
+	if profileId == nil then return nil, nil end
+	local solvers = pmGet({profileId, "solvers"})
+	if solvers == nil and createIfMissing then
+		solvers = {}
+		pmSet({profileId, "solvers"}, solvers, true)
+	end
+	return solvers, profileId
+end
+
+local function newSolverId()
+	return string.format("solver_%d_%d", os.time(), math.random(100000, 999999))
+end
+
+local function normalizeSolverSortOrders(solvers, profileId)
+	if solvers == nil or profileId == nil then return end
+	local ids = {}
+	for solverId, _ in pairs(solvers) do
+		table.insert(ids, solverId)
+	end
+	table.sort(ids, function(a, b)
+		local sa = solvers[a] or {}
+		local sb = solvers[b] or {}
+		local oa = sa.sort_order or 0
+		local ob = sb.sort_order or 0
+		if oa == ob then return tostring(a) < tostring(b) end
+		return oa < ob
+	end)
+	for index, solverId in ipairs(ids) do
+		pmSet({profileId, "solvers", solverId, "sort_order"}, index, true)
+	end
+end
+
+local function resolveSelectedSolverId(selectionValue)
+	if #solverIds == 0 then return nil end
+	if type(selectionValue) == "number" then
+		return solverIds[selectionValue]
+	end
+	if type(selectionValue) == "string" then
+		for i, name in ipairs(solverNames) do
+			if name == selectionValue then
+				return solverIds[i]
+			end
+		end
+	end
+	return nil
+end
+
+local function updateSolverSelectionUI(rigParams)
+	rigParams = rigParams or {}
+	local solvers = rigParams.solvers or {}
+	solverIds = {}
+	solverNames = {}
+
+	for solverId, solverParams in pairs(solvers) do
+		table.insert(solverIds, solverId)
+		local label = (solverParams and solverParams.label) or ""
+		table.insert(solverNames, (label ~= "" and label or solverId))
+	end
+
+	table.sort(solverIds, function(a, b)
+		local sa = solvers[a] or {}
+		local sb = solvers[b] or {}
+		local oa = sa.sort_order or 0
+		local ob = sb.sort_order or 0
+		if oa == ob then return tostring(a) < tostring(b) end
+		return oa < ob
+	end)
+
+	solverNames = {}
+	for _, solverId in ipairs(solverIds) do
+		local solverParams = solvers[solverId] or {}
+		local label = solverParams.label or ""
+		table.insert(solverNames, (label ~= "" and label or solverId))
+	end
+
+	if #solverNames == 0 then
+		solverNames = {"None"}
+		selectedSolverId = nil
+	end
+
+	configui.setSelections(widgetPrefix .. "solver_select", solverNames)
+
+	local selectedIndex = 1
+	if selectedSolverId == nil then
+		local currentSelection = configui.getValue(widgetPrefix .. "solver_select")
+		selectedSolverId = resolveSelectedSolverId(currentSelection)
+	end
+	if selectedSolverId ~= nil then
+		for i, solverId in ipairs(solverIds) do
+			if solverId == selectedSolverId then
+				selectedIndex = i
+				break
+			end
+		end
+	elseif #solverIds > 0 then
+		selectedSolverId = solverIds[1]
+		selectedIndex = 1
+	end
+	configui.setValue(widgetPrefix .. "solver_select", selectedIndex, true)
+end
+
+local function updateSetting(key, value)
+	if key == "end_control_type" then
+		value = value == 1 and M.ControllerType.LEFT_CONTROLLER or M.ControllerType.RIGHT_CONTROLLER
+	end
+	local profileId = getActiveProfileId()
+	if profileId == nil then return end
+
+	if key == "mesh" or key == "animation_mesh" or key == "animation_location_offset" or key == "animation_rotation_offset" or key == "mesh_location_offset" or key == "mesh_rotation_offset" then
+		pmSet({profileId, key}, value, true)
+		uevrUtils.executeUEVRCallbacks("on_ik_config_param_change", key, value, true)
+		return
+	end
+
+	if selectedSolverId ~= nil then
+		pmSet({profileId, "solvers", selectedSolverId, key}, value, true)
+		uevrUtils.executeUEVRCallbacks("on_ik_config_param_change", {"solvers", selectedSolverId, key}, value, true)
+	end
+end
+
+local function updateUI(rigParams)
+	rigParams = rigParams or {}
+	updateSolverSelectionUI(rigParams)
+
+	for key, value in pairs(rigDefaults) do
+		local v = rigParams[key]
+		if v == nil then v = value end
+		setUIValue(key, v)
+	end
+
+	local solverParams = getSelectedSolverParams(rigParams)
+	for key, value in pairs(solverDefaults) do
+		if key == "twist_bones" then
+			local twistValues = solverParams[key] or value or {}
+			for i = 1,3 do
+				local twistBone = twistValues[i] or {}
+				setUIValue("lower_twist_bone_" .. i, twistBone.bone or "")
+				setUIValue("lower_twist_bone_frac_" .. i, twistBone.fraction or 0.0)
+			end
+		elseif key == "end_control_type" then
+			local current = solverParams[key]
+			if current == nil then current = value end
+			local selectedIndex = current == M.ControllerType.LEFT_CONTROLLER and 1 or 2
+			configui.setValue(widgetPrefix .. key, selectedIndex, true)
+		else
+			local v = solverParams[key]
+			if v == nil then v = value end
+			setUIValue(key, v)
+		end
 	end
 end
 
@@ -360,11 +637,17 @@ function M.showConfiguration(saveFileName, options)
 			}
 		}
 	}
-    for paramName, param in pairs(configDefaults) do
+	for paramName, _ in pairs(rigDefaults) do
 		configui.onUpdate(widgetPrefix .. paramName, function(value)
-            --print("[ik_config_dev] onUpdate callback for param:", paramName, value)
 			updateSetting(paramName, value)
 		end)
+	end
+	for paramName, _ in pairs(solverDefaults) do
+		if paramName ~= "twist_bones" then
+		configui.onUpdate(widgetPrefix .. paramName, function(value)
+			updateSetting(paramName, value)
+		end)
+		end
 	end
 	configui.create(configDefinition)
 
@@ -439,12 +722,16 @@ local function setBoneList()
         table.insert(boneNames, 1, "None")
 
         configui.setSelections(widgetPrefix .. "end_bone_combo", boneNames)
+        configui.setSelections(widgetPrefix .. "joint_bone_combo", boneNames)
+        configui.setSelections(widgetPrefix .. "start_bone_combo", boneNames)
         configui.setSelections(widgetPrefix .. "wrist_bone_combo", boneNames)
         configui.setSelections(widgetPrefix .. "lower_twist_bone_1_combo", boneNames)
         configui.setSelections(widgetPrefix .. "lower_twist_bone_2_combo", boneNames)
         configui.setSelections(widgetPrefix .. "lower_twist_bone_3_combo", boneNames)
 
         setSelectedBone("end_bone_combo", "end_bone")
+        setSelectedBone("joint_bone_combo", "joint_bone")
+        setSelectedBone("start_bone_combo", "start_bone")
         setSelectedBone("wrist_bone_combo", "wrist_bone")
         setSelectedBone("lower_twist_bone_1_combo", "lower_twist_bone_1")
         setSelectedBone("lower_twist_bone_2_combo", "lower_twist_bone_2")
@@ -457,16 +744,98 @@ function M.init(m_paramManager)
 	paramManager = m_paramManager
     M.showConfiguration(configFileName)
 
-	paramManager:initProfileHandler(widgetPrefix, function(profileParams)
-		updateUI(profileParams)
-        setMeshList(profileParams["mesh"], true)
-        setAnimationMeshList(profileParams["animation_mesh"], true)
+	paramManager:initProfileHandler(widgetPrefix, function(rigParams)
+		updateUI(rigParams)
+		setMeshList((rigParams and rigParams["mesh"]) or "", true)
+		setAnimationMeshList((rigParams and rigParams["animation_mesh"]) or "", true)
         setBoneList()
 	end)
 end
 
 uevrUtils.registerUEVRCallback("on_ik_config_param_change", function(key, value)
-	setUIValue(key, value)
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+configui.onUpdate(widgetPrefix .. "solver_select", function(value)
+	selectedSolverId = resolveSelectedSolverId(value)
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+configui.onUpdate(widgetPrefix .. "solver_new", function()
+	local solvers, profileId = getActiveSolversTable(true)
+	if solvers == nil or profileId == nil then return end
+	local solverId = newSolverId()
+	local solver = uevrUtils.deepCopyTable(solverDefaults)
+	solver.label = "New Solver"
+	solver.sort_order = (#solverIds or 0) + 1
+	pmSet({profileId, "solvers", solverId}, solver, true)
+	normalizeSolverSortOrders(pmGet({profileId, "solvers"}), profileId)
+	selectedSolverId = solverId
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+configui.onUpdate(widgetPrefix .. "solver_duplicate", function()
+	if selectedSolverId == nil then return end
+	local solvers, profileId = getActiveSolversTable(false)
+	if solvers == nil or profileId == nil then return end
+	local current = solvers[selectedSolverId]
+	if current == nil then return end
+	local solverId = newSolverId()
+	local copy = uevrUtils.deepCopyTable(current)
+	copy.label = ((copy.label and copy.label ~= "") and copy.label or "Solver") .. " Copy"
+	copy.sort_order = (#solverIds or 0) + 1
+	pmSet({profileId, "solvers", solverId}, copy, true)
+	normalizeSolverSortOrders(pmGet({profileId, "solvers"}), profileId)
+	selectedSolverId = solverId
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+configui.onUpdate(widgetPrefix .. "solver_delete", function()
+	if selectedSolverId == nil then return end
+	local solvers, profileId = getActiveSolversTable(false)
+	if solvers == nil or profileId == nil then return end
+	pmSet({profileId, "solvers", selectedSolverId}, nil, true)
+	selectedSolverId = nil
+	normalizeSolverSortOrders(pmGet({profileId, "solvers"}), profileId)
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+local function moveSelectedSolver(delta)
+	if selectedSolverId == nil then return end
+	local solvers, profileId = getActiveSolversTable(false)
+	if solvers == nil or profileId == nil then return end
+	local idx = nil
+	for i, id in ipairs(solverIds) do
+		if id == selectedSolverId then
+			idx = i
+			break
+		end
+	end
+	if idx == nil then return end
+	local target = idx + delta
+	if target < 1 or target > #solverIds then return end
+	local aId = solverIds[idx]
+	local bId = solverIds[target]
+	local aOrder = (solvers[aId] and solvers[aId].sort_order) or idx
+	local bOrder = (solvers[bId] and solvers[bId].sort_order) or target
+	pmSet({profileId, "solvers", aId, "sort_order"}, bOrder, true)
+	pmSet({profileId, "solvers", bId, "sort_order"}, aOrder, true)
+	normalizeSolverSortOrders(pmGet({profileId, "solvers"}), profileId)
+	updateUI(getActiveRigParams())
+	setBoneList()
+end
+
+configui.onUpdate(widgetPrefix .. "solver_move_up", function()
+	moveSelectedSolver(-1)
+end)
+
+configui.onUpdate(widgetPrefix .. "solver_move_down", function()
+	moveSelectedSolver(1)
 end)
 
 configui.onCreateOrUpdate(widgetPrefix .. "mesh_combo_show_children", function(value)
@@ -490,6 +859,14 @@ configui.onUpdate(widgetPrefix .. "end_bone_combo", function(value)
     updateSetting("end_bone", boneNames[value] == "None" and "" or boneNames[value])
 end)
 
+configui.onUpdate(widgetPrefix .. "joint_bone_combo", function(value)
+    updateSetting("joint_bone", boneNames[value] == "None" and "" or boneNames[value])
+end)
+
+configui.onUpdate(widgetPrefix .. "start_bone_combo", function(value)
+	updateSetting("start_bone", boneNames[value] == "None" and "" or boneNames[value])
+end)
+
 configui.onUpdate(widgetPrefix .. "wrist_bone_combo", function(value)
     updateSetting("wrist_bone", boneNames[value] == "None" and "" or boneNames[value])
 end)
@@ -497,7 +874,9 @@ end)
 local function updateTwistBones()
     local twistBones = {}
     for i = 1,3 do
-        local boneName = configui.getValue(widgetPrefix .. "lower_twist_bone_" .. i)
+		local comboIndex = configui.getValue(widgetPrefix .. "lower_twist_bone_" .. i .. "_combo") or 1
+		local boneName = boneNames[comboIndex]
+		if boneName == "None" then boneName = "" end
         local frac = configui.getValue(widgetPrefix .. "lower_twist_bone_frac_" .. i)
         if boneName ~= nil and boneName ~= "" then
             table.insert(twistBones, {bone = boneName, fraction = frac})
@@ -518,8 +897,6 @@ configui.onUpdate(widgetPrefix .. "lower_twist_bone_3_combo", function(value)
     --updateSetting("lower_twist_bone_3", boneNames[value] == "None" and "" or boneNames[value])
     updateTwistBones()
 end)
-
-
 
 return M
 
