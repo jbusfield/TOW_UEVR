@@ -144,6 +144,13 @@ local configDefinition = {
 			{ widgetType = "end_rect", additionalSize = 12, rounding = 5 }, { widgetType = "unindent", width = 20 },
 			{ widgetType = "new_line" },
 			{ widgetType = "indent", width = 20 }, { widgetType = "text", label = "Control" }, { widgetType = "begin_rect", },
+                {
+                    widgetType = "combo",
+                    id = "hands_type",
+                    label = "Hands Type",
+                    selections = {"Forearms", "IK Arms"},
+                    initialValue = 1,
+                },
 				{
 					widgetType = "combo",
 					id = "interaction_control_mode",
@@ -158,15 +165,15 @@ local configDefinition = {
 					label = "Idle Animation",
 					initialValue = true
 				},
-                {
-                    widgetType = "drag_float3",
-                    id = "twist_rotation",
-                    label = "Rotation",
-                    speed = 1,
-                    range = {-180, 180},
-                    initialValue = {0, 0, 0},
-                    isHidden = false,
-                },
+                -- {
+                --     widgetType = "drag_float3",
+                --     id = "twist_rotation",
+                --     label = "Rotation",
+                --     speed = 1,
+                --     range = {-180, 180},
+                --     initialValue = {0, 0, 0},
+                --     isHidden = false,
+                -- },
 				-- {
 				-- 	widgetType = "checkbox",
 				-- 	id = "full_body_mode",
@@ -236,7 +243,7 @@ attachments.registerOnGripUpdateCallback(function()
     if configui.getValue("left_handed_mode") then
         return nil,nil,nil,weaponMesh, controllers.getController(Handed.Left)  --, controllers.getController(Handed.Left)
     else
-		local handsComponent = meshCopy or hands.getHandComponent(Handed.Right) --controllers.getController(Handed.Right) -- 
+		local handsComponent = status["ikMeshComponent"] or hands.getHandComponent(Handed.Right) --controllers.getController(Handed.Right) -- 
         if status["hasBoltActionFired"] == true then
 			handsComponent = controllers.getController(Handed.Right)
 		end
@@ -247,11 +254,38 @@ attachments.registerOnGripUpdateCallback(function()
 	--return getWeaponMesh(), controllers.getController(Handed.Right)
 end)
 
+local function handleHands(value)
+    hands.setAutoCreateHands(value == 1)
+    hands.destroyHands()
+    ik.destroyAll()
+    status["ikMeshComponent"] = nil
+    if value == 2 then
+        ik.new({ animationsFile = "hands_parameters" })
+    end
+end
+
+configui.onUpdate("hands_type", function(value)
+    handleHands(value)
+end)
+
+ik.registerOnMeshCreatedCallback(function(meshComponent, ikInstance)
+    --print("IK Mesh created:", meshComponent ~= nil, ikInstance ~= nil and ikInstance.rigId or "")
+    if meshComponent ~= nil then
+        meshComponent.bCastDynamicShadow = false
+        meshComponent.bRenderInDepthPass = false
+        animation.setComponent("left_arms", meshComponent)
+		animation.setComponent("right_arms", meshComponent)
+        status["ikMeshComponent"] = meshComponent
+    end
+end)
+
 function on_level_change(level)
 	meshCopy = nil
 	--print("Level changed\n")
 	flickerFixer.create()
 	setIdleCameraTimeout()
+	handleHands(configui.getValue("hands_type"))
+
 end
 
 --when leaving the inventory, destroy the current hands so if gloves changed the new ones are created
@@ -1027,155 +1061,165 @@ configui.create(configDefinition)
 -- 	end
 -- end
 
-local function getArmsCopy()
-	if meshCopy == nil then
-		local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
-		if fpvMesh ~= nil then
-			meshCopy = uevrUtils.createPoseableMeshFromSkeletalMesh(fpvMesh, {useDefaultPose = true, showDebug=false})
-			if meshCopy ~= nil then
-				uevrUtils.fixMeshFOV(meshCopy, "ForegroundPriorityEnabled", 0.0, true, true, false)
-				meshCopy:K2_AttachTo(pawn.RootComponent, uevrUtils.fname_from_string(""), 0, false)
-				meshCopy:SetVisibility(true, true)
-				meshCopy:SetHiddenInGame(false, true)
-				meshCopy.BoundsScale = 16.0
 
-				animation.setComponent("left_arms", meshCopy)
-				animation.setComponent("right_arms", meshCopy)
+-- local function getArmsCopy()
+-- 	if meshCopy == nil then
+-- 		local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
+-- 		if fpvMesh ~= nil then
+-- 			meshCopy = uevrUtils.createPoseableMeshFromSkeletalMesh(fpvMesh, {useDefaultPose = true, showDebug=false})
+-- 			if meshCopy ~= nil then
+-- 				uevrUtils.fixMeshFOV(meshCopy, "ForegroundPriorityEnabled", 0.0, true, true, false)
+-- 				meshCopy:K2_AttachTo(pawn.RootComponent, uevrUtils.fname_from_string(""), 0, false)
+-- 				meshCopy:SetVisibility(true, true)
+-- 				meshCopy:SetHiddenInGame(false, true)
+-- 				meshCopy.BoundsScale = 16.0
 
-			end
-		end
-	end
-	return meshCopy
-end
+-- 				animation.setComponent("left_arms", meshCopy)
+-- 				animation.setComponent("right_arms", meshCopy)
 
-function getCustomIKComponent(key)
-	return getArmsCopy()
-end
+-- 			end
+-- 		end
+-- 	end
+-- 	return meshCopy
+-- end
 
-function getCustomHandComponent(key)
-	return getArmsCopy()
-end
+-- function getCustomIKComponent(key)
+-- 	return getArmsCopy()
+-- end
 
-local ikParameters = {
-	mesh = "Custom",
-	animation_mesh = "",
-	animation_location_offset = uevrUtils.vector(0,0,0),
-    animation_rotation_offset = uevrUtils.rotator(0,0,0),
-	solvers = {
-		a323432_ab_434543 = {
-			label = "Arms Only Right",
-			solver_type = ik.SolverType.TWO_BONE,
-			end_bone = "r_Hand_JNT",
-			end_control_type = ik.ControllerType.RIGHT_CONTROLLER,
-			end_bone_offset = uevrUtils.vector(-8,0,0),
-			end_bone_rotation = uevrUtils.rotator(0,0,180),
-			allow_wrist_affects_elbow = false,
-			allow_stretch = false,
-			start_stretch_ratio = 0.0,
-			max_stretch_scale = 0.0,
-			wrist_bone = "r_wrist_JNT",
-			twist_bones = {
-				{ bone = "r_lowerTwistUp_JNT",  fraction = 0.25 },
-				{ bone = "r_lowerTwistMid_JNT", fraction = 0.50 },
-				{ bone = "r_lowerTwistLow_JNT", fraction = 0.75 },
-			},
-			sort_order = 1,
-		},
-		b567788_ab_434543 = {
-			label = "Arms Only Left",
-			--mesh = "Pawn.FPVMesh",
-			solver_type = ik.SolverType.TWO_BONE,
-			end_bone = "l_Hand_JNT",
-			end_control_type = ik.ControllerType.LEFT_CONTROLLER,
-			end_bone_offset = uevrUtils.vector(-8,0,0),
-			allow_wrist_affects_elbow = false,
-			allow_stretch = false,
-			start_stretch_ratio = 0.0,
-			max_stretch_scale = 0.0,
-			invert_forearm_roll = true,
-			wrist_bone = "l_wrist_JNT",
-			twist_bones = {
-				{ bone = "l_lowerTwistUp_JNT",  fraction = 0.25 },
-				{ bone = "l_lowerTwistMid_JNT", fraction = 0.50 },
-				{ bone = "l_lowerTwistLow_JNT", fraction = 0.75 },
-			},
-			sort_order = 2,
-		}
-	}
-}
-local ikInstance = nil
-register_key_bind("F2", function()
-	--hands.hideHands(true)
+-- function getCustomHandComponent(key)
+-- 	return getArmsCopy()
+-- end
 
-	ikInstance = ik.new({
-	})
-	--ikInstance:setParameters(ikParameters, true)
-	ikInstance:setActive("a323432_ab_434543")
-	ikInstance:setActive("b567788_ab_434543")
+-- local ikParameters = {
+-- 	mesh = "Custom",
+-- 	animation_mesh = "",
+-- 	animation_location_offset = uevrUtils.vector(0,0,0),
+--     animation_rotation_offset = uevrUtils.rotator(0,0,0),
+-- 	solvers = {
+-- 		a323432_ab_434543 = {
+-- 			label = "Arms Only Right",
+-- 			solver_type = ik.SolverType.TWO_BONE,
+-- 			end_bone = "r_Hand_JNT",
+-- 			end_control_type = ik.ControllerType.RIGHT_CONTROLLER,
+-- 			end_bone_offset = uevrUtils.vector(-8,0,0),
+-- 			end_bone_rotation = uevrUtils.rotator(0,0,180),
+-- 			allow_wrist_affects_elbow = false,
+-- 			allow_stretch = false,
+-- 			start_stretch_ratio = 0.0,
+-- 			max_stretch_scale = 0.0,
+-- 			wrist_bone = "r_wrist_JNT",
+-- 			twist_bones = {
+-- 				{ bone = "r_lowerTwistUp_JNT",  fraction = 0.25 },
+-- 				{ bone = "r_lowerTwistMid_JNT", fraction = 0.50 },
+-- 				{ bone = "r_lowerTwistLow_JNT", fraction = 0.75 },
+-- 			},
+-- 			sort_order = 1,
+-- 		},
+-- 		b567788_ab_434543 = {
+-- 			label = "Arms Only Left",
+-- 			--mesh = "Pawn.FPVMesh",
+-- 			solver_type = ik.SolverType.TWO_BONE,
+-- 			end_bone = "l_Hand_JNT",
+-- 			end_control_type = ik.ControllerType.LEFT_CONTROLLER,
+-- 			end_bone_offset = uevrUtils.vector(-8,0,0),
+-- 			allow_wrist_affects_elbow = false,
+-- 			allow_stretch = false,
+-- 			start_stretch_ratio = 0.0,
+-- 			max_stretch_scale = 0.0,
+-- 			invert_forearm_roll = true,
+-- 			wrist_bone = "l_wrist_JNT",
+-- 			twist_bones = {
+-- 				{ bone = "l_lowerTwistUp_JNT",  fraction = 0.25 },
+-- 				{ bone = "l_lowerTwistMid_JNT", fraction = 0.50 },
+-- 				{ bone = "l_lowerTwistLow_JNT", fraction = 0.75 },
+-- 			},
+-- 			sort_order = 2,
+-- 		}
+-- 	}
+-- }
+-- local ikInstance = nil
+-- register_key_bind("F2", function()
+-- 	--hands.hideHands(true)
 
-	-- local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
-	-- if fpvMesh ~= nil then
-	-- 	meshCopy = uevrUtils.createPoseableMeshFromSkeletalMesh(fpvMesh, {useDefaultPose = true, showDebug=false})
-	-- 	if meshCopy ~= nil then
-	-- 		uevrUtils.fixMeshFOV(meshCopy, "ForegroundPriorityEnabled", 0.0, true, true, false)
-	-- 		meshCopy:K2_AttachTo(pawn.RootComponent, uevrUtils.fname_from_string(""), 0, false)
-	-- 		meshCopy.RelativeLocation.Z = -100
-	-- 		meshCopy:SetVisibility(true, true)
-	-- 		meshCopy:SetHiddenInGame(false, true)
+-- 	ikInstance = ik.new({
+-- 	})
+-- 	--ikInstance:setParameters(ikParameters, true)
+-- 	ikInstance:setActive("a323432_ab_434543")
+-- 	ikInstance:setActive("b567788_ab_434543")
+
+-- 	-- local fpvMesh = uevrUtils.getValid(pawn, {"FPVMesh"})
+-- 	-- if fpvMesh ~= nil then
+-- 	-- 	meshCopy = uevrUtils.createPoseableMeshFromSkeletalMesh(fpvMesh, {useDefaultPose = true, showDebug=false})
+-- 	-- 	if meshCopy ~= nil then
+-- 	-- 		uevrUtils.fixMeshFOV(meshCopy, "ForegroundPriorityEnabled", 0.0, true, true, false)
+-- 	-- 		meshCopy:K2_AttachTo(pawn.RootComponent, uevrUtils.fname_from_string(""), 0, false)
+-- 	-- 		meshCopy.RelativeLocation.Z = -100
+-- 	-- 		meshCopy:SetVisibility(true, true)
+-- 	-- 		meshCopy:SetHiddenInGame(false, true)
 
 
-	-- 		-- Capture twist bone axes in lower-arm local space while mesh is in default pose.
-	-- 		-- Must happen here, before IK runs, to get the true rest-pose orientation.
-	-- 		-- LessLess_VectorRotator(v, rot) = express v in rot's local frame (bone space).
-	-- 		-- Reset all cached per-mesh state so it is re-derived from the new mesh.
-	-- 		-- ikState.upperLen          = nil
-	-- 		-- ikState.lowerLen          = nil
-	-- 		-- ikState.bonesKey          = nil
-	-- 		-- ikState.baselineElbowDirCS = nil
-	-- 		-- ikState.jointPoleAxisChoice = nil
-	-- 		-- ikState.jointPoleAxisForBones = nil
-	-- 		-- ikState.composeOrderSwing = nil
-	-- 		-- ikState.composeOrderTwist = nil
-	-- 		-- ikState.lastCtrlPoleCS = nil
-	-- 		-- ikState.poleTwistSmoothedDeg = 0.0
-	-- 		-- ikState.twistBoneVecs = {}
-	-- 		-- local lowerArmRot = meshCopy:GetBoneRotationByName("r_LowerArm_JNT", EBoneSpaces.ComponentSpace)
-	-- 		-- if lowerArmRot ~= nil then
-	-- 		-- 	local twistBoneNames = {"r_lowerTwistUp_JNT", "r_lowerTwistMid_JNT", "r_lowerTwistLow_JNT"}
-	-- 		-- 	for _, boneName in ipairs(twistBoneNames) do
-	-- 		-- 		local boneCS = meshCopy:GetBoneRotationByName(boneName, EBoneSpaces.ComponentSpace)
-	-- 		-- 		if boneCS ~= nil then
-	-- 		-- 			ikState.twistBoneVecs[boneName] = {
-	-- 		-- 				x = kismet_math_library:LessLess_VectorRotator(kismet_math_library:GetForwardVector(boneCS), lowerArmRot),
-	-- 		-- 				z = kismet_math_library:LessLess_VectorRotator(kismet_math_library:GetUpVector(boneCS),    lowerArmRot),
-	-- 		-- 			}
-	-- 		-- 		end
-	-- 		-- 	end
-	-- 		-- end
-	-- 	end
-	-- end
-end)
-
-configui.onUpdate("twist_rotation", function(value)
-	if ikInstance ~= nil then
-		--ikInstance:setSolverParameter("a323432_ab_434543", "baseline_forearm_roll_deg", value.z)
-		--ikInstance:setSolverParameter("b567788_ab_434543", "baseline_forearm_roll_deg", value.z)
-	end
-end)
-local handsHidden = false
-register_key_bind("F3", function()
-	handsHidden = not handsHidden
-    hands.hideHands(handsHidden)
-end)
--- register_key_bind("F4", function()
---     uevrUtils.profiler:report()
+-- 	-- 		-- Capture twist bone axes in lower-arm local space while mesh is in default pose.
+-- 	-- 		-- Must happen here, before IK runs, to get the true rest-pose orientation.
+-- 	-- 		-- LessLess_VectorRotator(v, rot) = express v in rot's local frame (bone space).
+-- 	-- 		-- Reset all cached per-mesh state so it is re-derived from the new mesh.
+-- 	-- 		-- ikState.upperLen          = nil
+-- 	-- 		-- ikState.lowerLen          = nil
+-- 	-- 		-- ikState.bonesKey          = nil
+-- 	-- 		-- ikState.baselineElbowDirCS = nil
+-- 	-- 		-- ikState.jointPoleAxisChoice = nil
+-- 	-- 		-- ikState.jointPoleAxisForBones = nil
+-- 	-- 		-- ikState.composeOrderSwing = nil
+-- 	-- 		-- ikState.composeOrderTwist = nil
+-- 	-- 		-- ikState.lastCtrlPoleCS = nil
+-- 	-- 		-- ikState.poleTwistSmoothedDeg = 0.0
+-- 	-- 		-- ikState.twistBoneVecs = {}
+-- 	-- 		-- local lowerArmRot = meshCopy:GetBoneRotationByName("r_LowerArm_JNT", EBoneSpaces.ComponentSpace)
+-- 	-- 		-- if lowerArmRot ~= nil then
+-- 	-- 		-- 	local twistBoneNames = {"r_lowerTwistUp_JNT", "r_lowerTwistMid_JNT", "r_lowerTwistLow_JNT"}
+-- 	-- 		-- 	for _, boneName in ipairs(twistBoneNames) do
+-- 	-- 		-- 		local boneCS = meshCopy:GetBoneRotationByName(boneName, EBoneSpaces.ComponentSpace)
+-- 	-- 		-- 		if boneCS ~= nil then
+-- 	-- 		-- 			ikState.twistBoneVecs[boneName] = {
+-- 	-- 		-- 				x = kismet_math_library:LessLess_VectorRotator(kismet_math_library:GetForwardVector(boneCS), lowerArmRot),
+-- 	-- 		-- 				z = kismet_math_library:LessLess_VectorRotator(kismet_math_library:GetUpVector(boneCS),    lowerArmRot),
+-- 	-- 		-- 			}
+-- 	-- 		-- 		end
+-- 	-- 		-- 	end
+-- 	-- 		-- end
+-- 	-- 	end
+-- 	-- end
 -- end)
 
-register_key_bind("F4", function()
-	if ikInstance ~= nil then
-    	ikInstance:printMeshBoneTransforms("a323432_ab_434543")
-	end
-end)
+-- configui.onUpdate("twist_rotation", function(value)
+-- 	if ikInstance ~= nil then
+-- 		--ikInstance:setSolverParameter("a323432_ab_434543", "baseline_forearm_roll_deg", value.z)
+-- 		--ikInstance:setSolverParameter("b567788_ab_434543", "baseline_forearm_roll_deg", value.z)
+-- 	end
+-- end)
+-- local handsHidden = false
+-- register_key_bind("F3", function()
+-- 	handsHidden = not handsHidden
+--     hands.hideHands(handsHidden)
+-- end)
+-- -- register_key_bind("F4", function()
+-- --     uevrUtils.profiler:report()
+-- -- end)
+
+-- register_key_bind("F4", function()
+-- 	if ikInstance ~= nil then
+--     	ikInstance:printMeshBoneTransforms("a323432_ab_434543")
+-- 	end
+-- end)
+
+-- register_key_bind("F1", function()
+--     ik.destroyAll()
+--     status["ikMeshComponent"] = nil
+--     --ik.new({ animationsFile = "hands_parameters" })
+-- end)
+
+
+
 
 function on_pre_engine_tick(engine, delta)
 	fixWeaponFXFOV()
@@ -1226,4 +1270,5 @@ uevr.params.sdk.callbacks.on_script_reset(function()
 		uevrUtils.destroyComponent(meshCopy, true, true)
 		meshCopy = nil
 	end
+	status["ikMeshComponent"] = nil
 end)

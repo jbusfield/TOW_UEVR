@@ -500,7 +500,11 @@ function M.add(animID, skeletalMeshComponent, animationDefinitions)
 end
 
 function M.setComponent(animID, skeletalMeshComponent)
-	animations[animID]["component"] = skeletalMeshComponent
+	if animations and animations[animID] ~= nil then
+		animations[animID]["component"] = skeletalMeshComponent
+	else
+		M.print("Animation ID " .. animID .. " not found in setComponent", LogLevel.Warning)
+	end
 end
 
 -- function lerpCallback(animID, animName, alpha)

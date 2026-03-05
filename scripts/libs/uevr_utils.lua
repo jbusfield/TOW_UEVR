@@ -1317,6 +1317,20 @@ local function updateLazyPoll(delta)
 	end
 end
 
+local function unregisterUEVRCallback(callbackName, callbackFunc)
+	if uevrCallbacks[callbackName] ~= nil then
+		for i, entry in ipairs(uevrCallbacks[callbackName]) do
+			if entry.func == callbackFunc then
+				table.remove(uevrCallbacks[callbackName], i)
+				break
+			end
+		end
+	end
+end
+function M.unregisterUEVRCallback(callbackName, callbackFunc)
+	unregisterUEVRCallback(callbackName, callbackFunc)
+end
+
 local function registerUEVRCallback(callbackName, callbackFunc, priority)
 	if priority == nil then priority = 0 end
 	if uevrCallbacks[callbackName] == nil then uevrCallbacks[callbackName] = {} end
@@ -1726,7 +1740,12 @@ function M.setLogToFile(val)
 end
 
 function M.printStackTrace()
+--	local ok, result = pcall(function()
     print(debug.traceback())
+--	end)
+--	if not ok then
+--		M.print(result)
+--	end
 end
 
 function M.print(str, logLevel)
@@ -3156,7 +3175,9 @@ function M.destroyComponent(component, destroyOwner, destroyChildren)
 				if children ~= nil then
 					M.print("[destroyComponent] Found " .. #children .. " children")
 					for i = #children, 1, -1 do
-						M.destroyComponent(children[i], destroyOwner, destroyChildren)
+						-- Never propagate destroyOwner into children: they share the same owner actor.
+						-- Destroying the owner during child recursion can invalidate subsequent UObject calls and crash.
+						M.destroyComponent(children[i], false, destroyChildren)
 					end
 				else
 					M.print("[destroyComponent] No children found")

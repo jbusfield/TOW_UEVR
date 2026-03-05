@@ -30,6 +30,7 @@ local rigDefaults = {
 }
 local solverDefaults = {
 	label = "",
+	active = true,
 	solver_type = M.SolverType.TWO_BONE,
     end_bone = "",
 	joint_bone = "",
@@ -45,6 +46,7 @@ local solverDefaults = {
     twist_bones = {},
     --invert_forearm_roll = false,
 	sort_order = 0,
+	smoothing = 0,
 }
 
 local meshList = {}
@@ -67,7 +69,7 @@ local function getConfigWidgets(m_paramManager)
 		},
             {
                 widgetType = "input_text",
-                id = widgetPrefix .. "label",
+                id = widgetPrefix .. "rig_label",
                 label = "Label",
                 initialValue = "",
                 width = 300,
@@ -100,7 +102,7 @@ local function getConfigWidgets(m_paramManager)
                 id = widgetPrefix .. "mesh_location_offset",
                 label = "Location",
                 speed = 0.1,
-                range = {-100, 100},
+                range = {-500, 500},
                 initialValue = {0,0,0}
             },
             {
@@ -137,7 +139,7 @@ local function getConfigWidgets(m_paramManager)
                     id = widgetPrefix .. "animation_location_offset",
                     label = "Animation Location",
                     speed = 0.1,
-                    range = {-100, 100},
+                    range = {-500, 500},
                     initialValue = {0,0,0}
                 },
                 {
@@ -149,267 +151,292 @@ local function getConfigWidgets(m_paramManager)
                     initialValue = {0,0,0}
                 },
             { widgetType = "tree_pop" },
-            {
-                widgetType = "tree_node",
-                id = widgetPrefix .. "solvers_tree",
-                initialOpen = true,
-                label = "Solvers"
-            },
+        	{ widgetType = "begin_group", id =  widgetPrefix .. "solvers_group", isHidden = false },
 				{
-					widgetType = "combo",
-					id = widgetPrefix .. "solver_select",
-					label = "Solver",
-					selections = {"None"},
-					initialValue = 1,
-					width = 300
+					widgetType = "tree_node",
+					id = widgetPrefix .. "solvers_tree",
+					initialOpen = true,
+					label = "Solvers"
 				},
-				{ widgetType = "same_line" },
+					{
+						widgetType = "combo",
+						id = widgetPrefix .. "solver_select",
+						label = "Solver",
+						selections = {"None"},
+						initialValue = 1,
+						width = 150
+					},
+					{ widgetType = "same_line" },
+					{
+						widgetType = "button",
+						id = widgetPrefix .. "solver_new",
+						label = "New"
+					},
+					{ widgetType = "same_line" },
+					{
+						widgetType = "button",
+						id = widgetPrefix .. "solver_duplicate",
+						label = "Duplicate"
+					},
+					{ widgetType = "same_line" },
+					{
+						widgetType = "button",
+						id = widgetPrefix .. "solver_delete",
+						label = "Delete"
+					},
+					{ widgetType = "same_line" },
+					{
+						widgetType = "button",
+						id = widgetPrefix .. "solver_move_up",
+						label = "Move Up"
+					},
+					{ widgetType = "same_line" },
+					{
+						widgetType = "button",
+						id = widgetPrefix .. "solver_move_down",
+						label = "Move Down"
+					},
+        			{ widgetType = "begin_group", id =  widgetPrefix .. "solver_group", isHidden = false },
+						{
+							widgetType = "checkbox",
+							id = widgetPrefix .. "active",
+							label = "Active",
+							initialValue = false
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "label",
+							label = "Solver Name",
+							initialValue = "",
+							isHidden = false
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "solver_type",
+							label = "Solver Type",
+							selections = {"Two Bone", "Rotation Only"},
+							initialValue = 1,
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "end_control_type",
+							label = "Hand",
+							selections = {"Left", "Right"},
+							initialValue = 2,
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "end_bone_combo",
+							label = "Hand Bone",
+							selections = {"None"},
+							initialValue = 1,
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "end_bone",
+							label = "Hand Bone",
+							initialValue = "",
+							isHidden = hideLabels
+						},
+						{
+							widgetType = "drag_float3",
+							id = widgetPrefix .. "end_bone_offset",
+							label = "Hand Position",
+							speed = 0.1,
+							range = {-100, 100},
+							initialValue = {0,0,0}
+						},
+						{
+							widgetType = "drag_float3",
+							id = widgetPrefix .. "end_bone_rotation",
+							label = "Hand Rotation",
+							speed = 1,
+							range = {-360, 360},
+							initialValue = {0,0,0}
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "joint_bone_combo",
+							label = "Forearm Bone",
+							selections = {"None"},
+							initialValue = 1,
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "joint_bone",
+							label = "Forearm Bone",
+							initialValue = "",
+							isHidden = hideLabels
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "start_bone_combo",
+							label = "Upper Arm Bone",
+							selections = {"None"},
+							initialValue = 1,
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "start_bone",
+							label = "Upper Arm Bone",
+							initialValue = "",
+							isHidden = hideLabels
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "wrist_bone_combo",
+							label = "Wrist Bone",
+							selections = {"None"},
+							initialValue = 1,
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "wrist_bone",
+							label = "Wrist Bone",
+							initialValue = "",
+							width = 300,
+							isHidden = hideLabels
+						},
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "smoothing",
+							label = "Smoothing",
+							speed = 0.01,
+							range = {0, 1},
+							initialValue = 0.0
+						},
+						-- {
+						-- 	widgetType = "checkbox",
+						-- 	id = widgetPrefix .. "invert_forearm_roll",
+						-- 	label = "Invert Forearm Roll",
+						-- 	initialValue = false
+						-- },
+						{
+							widgetType = "checkbox",
+							id = widgetPrefix .. "allow_wrist_affects_elbow",
+							label = "Allow Wrist Affects Elbow",
+							initialValue = false
+						},
+						{
+							widgetType = "checkbox",
+							id = widgetPrefix .. "allow_stretch",
+							label = "Allow Stretch",
+							initialValue = false
+						},
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "start_stretch_ratio",
+							label = "Start Stretch Ratio",
+							speed = 0.01,
+							range = {0, 1},
+							initialValue = 0.0
+						},
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "max_stretch_scale",
+							label = "Max Stretch Scale",
+							speed = 0.01,
+							range = {0, 5},
+							initialValue = 0.0
+						},
+						{
+							widgetType = "slider_int",
+							id = widgetPrefix .. "sort_order",
+							label = "Sort Order",
+							range = {0, 100},
+							initialValue = 0,
+							isHidden = true
+						},
+						{ widgetType = "new_line" },
+						{
+							widgetType = "text",
+							id = widgetPrefix .. "twist_header",
+							label = "Lower Arm Twist Bones",
+							wrapped = false
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "lower_twist_bone_1_combo",
+							label = "Bone 1",
+							selections = {"None"},
+							initialValue = 1,
+							width = 200
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "lower_twist_bone_1",
+							label = "Bone 1",
+							initialValue = "",
+							width = 200,
+							isHidden = hideLabels
+						},
+						{ widgetType = "same_line" },
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "lower_twist_bone_frac_1",
+							label = "%",
+							speed = 0.01,
+							range = {0,1},
+							initialValue = 0.25,
+							width = 80
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "lower_twist_bone_2_combo",
+							label = "Bone 2",
+							selections = {"None"},
+							initialValue = 1,
+							width = 200
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "lower_twist_bone_2",
+							label = "Bone 2",
+							initialValue = "",
+							width = 200,
+							isHidden = hideLabels
+						},
+						{ widgetType = "same_line" },
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "lower_twist_bone_frac_2",
+							label = "%",
+							speed = 0.01,
+							range = {0,1},
+							initialValue = 0.5,
+							width = 80
+						},
+						{
+							widgetType = "combo",
+							id = widgetPrefix .. "lower_twist_bone_3_combo",
+							label = "Bone 3",
+							selections = {"None"},
+							initialValue = 1,
+							width = 200
+						},
+						{
+							widgetType = "input_text",
+							id = widgetPrefix .. "lower_twist_bone_3",
+							label = "Bone 3",
+							initialValue = "",
+							width = 200,
+							isHidden = hideLabels
+						},
+						{ widgetType = "same_line" },
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "lower_twist_bone_frac_3",
+							label = "%",
+							speed = 0.01,
+							range = {0,1},
+							initialValue = 0.75,
+							width = 80
+						},
+					{ widgetType = "end_group" },
 				{
-					widgetType = "button",
-					id = widgetPrefix .. "solver_new",
-					label = "New"
+					widgetType = "tree_pop"
 				},
-				{ widgetType = "same_line" },
-				{
-					widgetType = "button",
-					id = widgetPrefix .. "solver_duplicate",
-					label = "Duplicate"
-				},
-				{ widgetType = "same_line" },
-				{
-					widgetType = "button",
-					id = widgetPrefix .. "solver_delete",
-					label = "Delete"
-				},
-				{ widgetType = "same_line" },
-				{
-					widgetType = "button",
-					id = widgetPrefix .. "solver_move_up",
-					label = "^"
-				},
-				{ widgetType = "same_line" },
-				{
-					widgetType = "button",
-					id = widgetPrefix .. "solver_move_down",
-					label = "v"
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "solver_type",
-					label = "Solver Type",
-					selections = {"Two Bone", "Rotation Only"},
-					initialValue = 1,
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "end_control_type",
-					label = "Hand",
-					selections = {"Left", "Right"},
-					initialValue = 2,
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "end_bone_combo",
-					label = "Hand Bone",
-					selections = {"None"},
-					initialValue = 1,
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "end_bone",
-					label = "Hand Bone",
-					initialValue = "",
-                    isHidden = hideLabels
-				},
-				{
-					widgetType = "drag_float3",
-					id = widgetPrefix .. "end_bone_offset",
-					label = "Hand Position",
-					speed = 0.1,
-					range = {-100, 100},
-					initialValue = {0,0,0}
-				},
-				{
-					widgetType = "drag_float3",
-					id = widgetPrefix .. "end_bone_rotation",
-					label = "Hand Rotation",
-					speed = 1,
-					range = {-360, 360},
-					initialValue = {0,0,0}
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "joint_bone_combo",
-					label = "Forearm Bone",
-					selections = {"None"},
-					initialValue = 1,
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "joint_bone",
-					label = "Forearm Bone",
-					initialValue = "",
-                    isHidden = hideLabels
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "start_bone_combo",
-					label = "Upper Arm Bone",
-					selections = {"None"},
-					initialValue = 1,
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "start_bone",
-					label = "Upper Arm Bone",
-					initialValue = "",
-                    isHidden = hideLabels
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "wrist_bone_combo",
-					label = "Wrist Bone",
-					selections = {"None"},
-					initialValue = 1,
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "wrist_bone",
-					label = "Wrist Bone",
-					initialValue = "",
-					width = 300,
-                    isHidden = hideLabels
-				},
-				-- {
-				-- 	widgetType = "checkbox",
-				-- 	id = widgetPrefix .. "invert_forearm_roll",
-				-- 	label = "Invert Forearm Roll",
-				-- 	initialValue = false
-				-- },
-				{
-					widgetType = "checkbox",
-					id = widgetPrefix .. "allow_wrist_affects_elbow",
-					label = "Allow Wrist Affects Elbow",
-					initialValue = false
-				},
-				{
-					widgetType = "checkbox",
-					id = widgetPrefix .. "allow_stretch",
-					label = "Allow Stretch",
-					initialValue = false
-				},
-				{
-					widgetType = "slider_float",
-					id = widgetPrefix .. "start_stretch_ratio",
-					label = "Start Stretch Ratio",
-					speed = 0.01,
-					range = {0, 1},
-					initialValue = 0.0
-				},
-				{
-					widgetType = "slider_float",
-					id = widgetPrefix .. "max_stretch_scale",
-					label = "Max Stretch Scale",
-					speed = 0.01,
-					range = {0, 5},
-					initialValue = 0.0
-				},
-				{
-					widgetType = "slider_int",
-					id = widgetPrefix .. "sort_order",
-					label = "Sort Order",
-					range = {0, 100},
-					initialValue = 0,
-                    isHidden = true
-				},
-				{ widgetType = "new_line" },
-				{
-					widgetType = "text",
-					id = widgetPrefix .. "twist_header",
-					label = "Lower Arm Twist Bones",
-					wrapped = false
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "lower_twist_bone_1_combo",
-					label = "Bone 1",
-					selections = {"None"},
-					initialValue = 1,
-                    width = 200
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "lower_twist_bone_1",
-					label = "Bone 1",
-					initialValue = "",
-					width = 200,
-                    isHidden = hideLabels
-				},
-                { widgetType = "same_line" },
-				{
-					widgetType = "slider_float",
-					id = widgetPrefix .. "lower_twist_bone_frac_1",
-					label = "%",
-					speed = 0.01,
-					range = {0,1},
-					initialValue = 0.25,
-					width = 80
-				},
-				{
-					widgetType = "combo",
-					id = widgetPrefix .. "lower_twist_bone_2_combo",
-					label = "Bone 2",
-					selections = {"None"},
-					initialValue = 1,
-                    width = 200
-				},
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "lower_twist_bone_2",
-					label = "Bone 2",
-					initialValue = "",
-					width = 200,
-                    isHidden = hideLabels
-				},
-                { widgetType = "same_line" },
-				{
-					widgetType = "slider_float",
-					id = widgetPrefix .. "lower_twist_bone_frac_2",
-					label = "%",
-					speed = 0.01,
-					range = {0,1},
-					initialValue = 0.5,
-					width = 80
-				},
-                {
-                    widgetType = "combo",
-                    id = widgetPrefix .. "lower_twist_bone_3_combo",
-                    label = "Bone 3",
-                    selections = {"None"},
-                    initialValue = 1,
-                    width = 200
-                },
-				{
-					widgetType = "input_text",
-					id = widgetPrefix .. "lower_twist_bone_3",
-					label = "Bone 3",
-					initialValue = "",
-					width = 200,
-                    isHidden = hideLabels
-				},
-                { widgetType = "same_line" },
-				{
-					widgetType = "slider_float",
-					id = widgetPrefix .. "lower_twist_bone_frac_3",
-					label = "%",
-					speed = 0.01,
-					range = {0,1},
-					initialValue = 0.75,
-					width = 80
-				},
-            {
-                widgetType = "tree_pop"
-            },
+			{ widgetType = "end_group" },
 		{
 			widgetType = "tree_pop"
 		},
@@ -481,7 +508,7 @@ local function getActiveSolversTable(createIfMissing)
 end
 
 local function newSolverId()
-	return string.format("solver_%d_%d", os.time(), math.random(100000, 999999))
+	return uevrUtils.guid()
 end
 
 local function normalizeSolverSortOrders(solvers, profileId)
@@ -550,6 +577,9 @@ local function updateSolverSelectionUI(rigParams)
 		solverNames = {"None"}
 		selectedSolverId = nil
 	end
+
+	configui.setHidden(widgetPrefix .. "solver_group", #solverNames == 0)
+
 
 	configui.setSelections(widgetPrefix .. "solver_select", solverNames)
 
@@ -644,9 +674,9 @@ function M.showConfiguration(saveFileName, options)
 	end
 	for paramName, _ in pairs(solverDefaults) do
 		if paramName ~= "twist_bones" then
-		configui.onUpdate(widgetPrefix .. paramName, function(value)
-			updateSetting(paramName, value)
-		end)
+			configui.onUpdate(widgetPrefix .. paramName, function(value)
+				updateSetting(paramName, value)
+			end)
 		end
 	end
 	configui.create(configDefinition)
@@ -671,6 +701,8 @@ local function setMeshList(currentMeshName, noCallbacks)
 
 	configui.setSelections(widgetPrefix .. "mesh_combo", meshList)
 	setSelectedMesh(currentMeshName, "mesh_combo", noCallbacks)
+
+	configui.setHidden(widgetPrefix .. "solvers_group", configui.getValue(widgetPrefix .. "mesh_combo") == 1)
 end
 
 local function setAnimationMeshList(currentMeshName, noCallbacks)
@@ -739,29 +771,15 @@ local function setBoneList()
     end
 end
 
-function M.init(m_paramManager)
-	--configDefaults = m_paramManager and m_paramManager:getAllActiveProfileParams() or {}
-	paramManager = m_paramManager
-    M.showConfiguration(configFileName)
-
-	paramManager:initProfileHandler(widgetPrefix, function(rigParams)
-		updateUI(rigParams)
-		setMeshList((rigParams and rigParams["mesh"]) or "", true)
-		setAnimationMeshList((rigParams and rigParams["animation_mesh"]) or "", true)
-        setBoneList()
-	end)
-end
-
-uevrUtils.registerUEVRCallback("on_ik_config_param_change", function(key, value)
-	updateUI(getActiveRigParams())
-	setBoneList()
-end)
-
 configui.onUpdate(widgetPrefix .. "solver_select", function(value)
 	selectedSolverId = resolveSelectedSolverId(value)
 	updateUI(getActiveRigParams())
 	setBoneList()
 end)
+
+-- configui.onCreate(widgetPrefix .. "solver_select", function()
+-- 	configui.setHidden(widgetPrefix .. "solver_group", configui.getValue(widgetPrefix .. "solver_select") == 1)
+-- end)
 
 configui.onUpdate(widgetPrefix .. "solver_new", function()
 	local solvers, profileId = getActiveSolversTable(true)
@@ -844,6 +862,8 @@ end)
 
 configui.onUpdate(widgetPrefix .. "mesh_combo", function(value)
     updateSetting("mesh", meshList[value] == "None" and "" or meshList[value])
+	configui.setHidden(widgetPrefix .. "solvers_group", configui.getValue(widgetPrefix .. "mesh_combo") == 1)
+
     setBoneList()
 end)
 
@@ -871,6 +891,11 @@ configui.onUpdate(widgetPrefix .. "wrist_bone_combo", function(value)
     updateSetting("wrist_bone", boneNames[value] == "None" and "" or boneNames[value])
 end)
 
+configui.onUpdate(widgetPrefix .. "label", function(value)
+	--change the label of the currently selected solver
+	updateSolverSelectionUI(getActiveRigParams())
+end)
+
 local function updateTwistBones()
     local twistBones = {}
     for i = 1,3 do
@@ -886,16 +911,50 @@ local function updateTwistBones()
 end
 
 configui.onUpdate(widgetPrefix .. "lower_twist_bone_1_combo", function(value)
-    --updateSetting("lower_twist_bone_1", boneNames[value] == "None" and "" or boneNames[value])
     updateTwistBones()
 end)
 configui.onUpdate(widgetPrefix .. "lower_twist_bone_2_combo", function(value)
-    --updateSetting("lower_twist_bone_2", boneNames[value] == "None" and "" or boneNames[value])
     updateTwistBones()
 end)
 configui.onUpdate(widgetPrefix .. "lower_twist_bone_3_combo", function(value)
-    --updateSetting("lower_twist_bone_3", boneNames[value] == "None" and "" or boneNames[value])
     updateTwistBones()
+end)
+
+configui.onUpdate(widgetPrefix .. "lower_twist_bone_frac_1", function(value)
+    updateTwistBones()
+end)
+configui.onUpdate(widgetPrefix .. "lower_twist_bone_frac_2", function(value)
+    updateTwistBones()
+end)
+configui.onUpdate(widgetPrefix .. "lower_twist_bone_frac_3", function(value)
+    updateTwistBones()
+end)
+
+
+function M.init(m_paramManager)
+	--configDefaults = m_paramManager and m_paramManager:getAllActiveProfileParams() or {}
+	paramManager = m_paramManager
+    M.showConfiguration(configFileName)
+
+	paramManager:initProfileHandler(widgetPrefix, function(rigParams)
+		updateUI(rigParams)
+		setMeshList((rigParams and rigParams["mesh"]) or "", true)
+		setAnimationMeshList((rigParams and rigParams["animation_mesh"]) or "", true)
+        setBoneList()
+	end)
+
+end
+
+uevrUtils.registerUEVRCallback("on_ik_config_param_change", function(key, value)
+	updateUI(getActiveRigParams())
+	setBoneList()
+end)
+
+uevrUtils.registerLevelChangeCallback(function(level)
+	local rigParams = getActiveRigParams()
+	setMeshList((rigParams and rigParams["mesh"]) or "", true)
+	setAnimationMeshList((rigParams and rigParams["animation_mesh"]) or "", true)
+	setBoneList()
 end)
 
 return M

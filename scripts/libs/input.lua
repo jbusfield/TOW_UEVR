@@ -366,7 +366,7 @@ local cameraComponent = {
 local pawnSettings = nil
 local function resetPawnSettings()
 	cameraComponent:reset()
-	if uevrUtils.getValid(pawn) ~= nil and pawnSettings ~= nil then
+	if uevrUtils.getValid(pawn) ~= nil and pawnSettings ~= nil and pawn.bUseControllerRotationPitch ~= nil then
 		--restore pawn settings
 		--print("Restoring pawn settings")
 		pawn.bUseControllerRotationPitch = pawnSettings.bUseControllerRotationPitch
@@ -464,7 +464,7 @@ local function updateAim()
 		-- 	cameraComponent:setRotation(aimRotationOffset)
 		-- end
 		--cameraComponent:setRotation(getAimOffsetAdjustedRotation(uevrUtils.rotator(0,0,0)))
-		if pawn ~= nil and decoupledYaw ~= nil then
+		if pawn ~= nil and decoupledYaw ~= nil and pawn.Controller ~= nil then
 			pawn.Controller:SetControlRotation(uevrUtils.rotator(0, decoupledYaw+bodyRotationOffset, 0))
 		end
 	else
