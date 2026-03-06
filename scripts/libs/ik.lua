@@ -157,9 +157,91 @@ local IK_MIN_TWIST_DEG = 0.02
 -- Lower values = heavier smoothing (more lag), higher = more responsive.
 --local IK_POS_SMOOTH_ALPHA = 0.6
 
+local FOREARM_TWIST_MAX_DEG_DEFAULT = 100.0
+
+local function normalizeDeg180(angleDeg)
+	if angleDeg == nil then return nil end
+	return (((angleDeg + 180.0) % 360.0) - 180.0)
+end
+
+-- Unwrap an angle to be continuous vs a previous sample.
+-- Keeps the returned value within +/-180 of prevAngleDeg.
+local function unwrapDeg(angleDeg, prevAngleDeg)
+	if angleDeg == nil or prevAngleDeg == nil then return angleDeg end
+	local delta = angleDeg - prevAngleDeg
+	delta = (((delta + 180.0) % 360.0) - 180.0)
+	return prevAngleDeg + delta
+end
+
+-- Robust twist extraction: swing–twist decomposition of the relative rotation.
+-- This avoids the fundamental instability of using raw up/right vectors when wrist pitch/yaw changes.
+local RAD2DEG = 180.0 / math.pi
+local _reuseEulerA = nil
+local _reuseEulerB = nil
+
+local function setVec3(v, x, y, z)
+	if v == nil then return end
+	if v.X ~= nil then
+		v.X = x; v.Y = y; v.Z = z
+	else
+		v.x = x; v.y = y; v.z = z
+	end
+end
+
+local function computeTwistDegAroundAxis_Rotators(rotA, rotB, axis)
+	if rotA == nil or rotB == nil or axis == nil then return nil end
+
+	-- Axis is expected to already be normalized (call sites pass SafeNormalize(lowerDirCS)).
+	-- Keep this hot path sqrt-free: just guard against a degenerate axis.
+	local ax = axis.X or axis.x or 0.0
+	local ay = axis.Y or axis.y or 0.0
+	local az = axis.Z or axis.z or 0.0
+	local len2 = (ax * ax) + (ay * ay) + (az * az)
+	if len2 < 1e-8 then return nil end
+
+	-- IMPORTANT: use Unreal's own Euler->Quat conversion.
+	-- Rotator (Pitch/Yaw/Roll) can represent the same orientation with different Euler triples;
+	-- hand-rolling conversion/order can disagree with engine conventions and leak pitch/yaw into "twist".
+	if _reuseEulerA == nil then
+		_reuseEulerA = uevrUtils.vector(0.0, 0.0, 0.0)
+		_reuseEulerB = uevrUtils.vector(0.0, 0.0, 0.0)
+	end
+	setVec3(_reuseEulerA, rotA.Roll or 0.0, rotA.Pitch or 0.0, rotA.Yaw or 0.0) -- Roll, Pitch, Yaw
+	setVec3(_reuseEulerB, rotB.Roll or 0.0, rotB.Pitch or 0.0, rotB.Yaw or 0.0)
+
+	local qa = kismet_math_library:Quat_MakeFromEuler(_reuseEulerA)
+	local qb = kismet_math_library:Quat_MakeFromEuler(_reuseEulerB)
+	if qa == nil or qb == nil then return nil end
+
+	local aw = qa.W or qa.w or 1.0
+	local axq = qa.X or qa.x or 0.0
+	local ayq = qa.Y or qa.y or 0.0
+	local azq = qa.Z or qa.z or 0.0
+
+	local bw = qb.W or qb.w or 1.0
+	local bxq = qb.X or qb.x or 0.0
+	local byq = qb.Y or qb.y or 0.0
+	local bzq = qb.Z or qb.z or 0.0
+
+	-- Relative rotation qRel = qb * conj(qa) (qa assumed unit).
+	local rw = (bw * aw) + (bxq * axq) + (byq * ayq) + (bzq * azq)
+	local rx = (-bw * axq) + (bxq * aw) - (byq * azq) + (bzq * ayq)
+	local ry = (-bw * ayq) + (bxq * azq) + (byq * aw) - (bzq * axq)
+	local rz = (-bw * azq) - (bxq * ayq) + (byq * axq) + (bzq * aw)
+
+	-- No normalization required: atan2(k*dot, k*w) == atan2(dot, w) for k>0.
+	-- Still guard against degenerate quats.
+	local n2 = (rw * rw) + (rx * rx) + (ry * ry) + (rz * rz)
+	if n2 < 1e-12 then return 0.0 end
+
+	-- Twist angle around axis for qRel: theta = 2 * atan2(dot(v, axis), w)
+	local dot = (rx * ax) + (ry * ay) + (rz * az)
+	return (2.0 * math.atan(dot, rw)) * RAD2DEG
+end
+
 -- Optional: couple wrist roll into elbow pole so the elbow raises/lowers slightly as you pronate/supinate.
 -- Keep conservative defaults to avoid pole flips.
-local ELBOW_POLE_TWIST_INFLUENCE = -0.25 -- 0..1 (try 0.15-0.40)
+local ELBOW_POLE_TWIST_INFLUENCE = 0.35 -- 0..1 (try 0.15-0.40)
 local ELBOW_POLE_TWIST_MAX_DEG   = 75.0 -- clamp the measured twist before applying
 
 -- Module-level constants (allocated once, never mutated).
@@ -183,7 +265,6 @@ local function newIKState()
 		composeOrderTwistElbow = nil,
 		twistBoneVecs = nil,       -- per-bone: { x, z } axes stored in lower-arm local space at F2 capture time
 		lastCtrlPoleCS = nil,      -- for stable pole twist coupling
-		poleTwistSmoothedDeg = 0.0,
 		-- Cached per-mesh constants.
 		-- NOTE: compToWorld and meshRightVec are NOT cached — they change every tick as the pawn rotates.
 		upperLen = nil,            -- upper arm bone length         — skeleton constant
@@ -191,6 +272,10 @@ local function newIKState()
 		bonesKey = nil,            -- JointBone.."->"..EndBone     — never changes per call site
 		-- Smoothed controller target offset in component space (from shoulder).
 		lastEffectorOffsetCS = nil,
+		-- Last measured forearm tube twist (degrees), unwrapped for continuity.
+		--lastForearmTwistDegUnwrapped = nil,
+		-- Last applied forearm tube twist (degrees).
+		--lastForearmTwistDegApplied = nil,
 	}
 end
 
@@ -496,6 +581,9 @@ local keyMap = {
     allow_stretch = "allowStretch",
     start_stretch_ratio = "startStretchRatio",
     max_stretch_scale = "maxStretchScale",
+    wrist_twist_influence = "wristTwistInfluence",
+    wrist_twist_max = "wristTwistMax",
+	forearm_twist_max = "forearmTwistMax",
     smoothing = "smoothing",
     end_control_type = "hand",
     twist_bones = "twistBones",
@@ -1031,7 +1119,7 @@ local function getTargetLocationAndRotation(hand, controller)
     return loc, rot
 end
 
-
+--stopDebug = false
 function Rig:solveTwoBone(solverParams)
     -- mesh,               -- UPoseableMeshComponent
     -- RootBone,           -- e.g. "UpperArm_L"
@@ -1054,12 +1142,15 @@ function Rig:solveTwoBone(solverParams)
     -- local controllerPosWS = solverParams.controller and solverParams.controller:K2_GetComponentLocation() or nil
     -- local controllerRotWS = solverParams.controller and solverParams.controller:K2_GetComponentRotation() or nil
     local handOffset = solverParams.handOffset
-    local AllowStretch = solverParams.allowStretch
-    local StartStretchRatio = solverParams.startStretchRatio
-    local MaxStretchScale = solverParams.maxStretchScale
+    local allowStretch = solverParams.allowStretch
+    local startStretchRatio = solverParams.startStretchRatio
+    local maxStretchScale = solverParams.maxStretchScale
     local twistBones = solverParams.twistBones
     local endBoneRotation = solverParams.endBoneRotation
     local allowWristAffectsElbow = solverParams.allowWristAffectsElbow
+    local wristTwistInfluence = solverParams.wristTwistInfluence
+    local wristTwistMax = solverParams.wristTwistMax
+	local forearmTwistMax = solverParams.forearmTwistMax
 	local smoothing = solverParams.smoothing or 0.0
 --   local invertForearmRoll = solverParams.invertForearmRoll
 	local state = solverParams.state
@@ -1109,6 +1200,7 @@ function Rig:solveTwoBone(solverParams)
 		end
 		effectorWS = kismet_math_library:Add_VectorVector(controllerPosWS, offsetWS)
 	end
+    local controllerRotCS = kismet_math_library:InverseTransformRotation(compToWorld, controllerRotWS)
 
 	-- Smooth controller target in component-space offset from shoulder.
 	-- This damps root-motion/head-turn jitter without smoothing final solved outputs.
@@ -1146,12 +1238,11 @@ function Rig:solveTwoBone(solverParams)
     -- 3. Auto-generate JointTarget (elbow direction)
     --------------------------------------------------------------
     -- Forward direction from shoulder → hand target
-	local Forward = SafeNormalize(kismet_math_library:Subtract_VectorVector(effectorWS, ShoulderWS))
+	local shoulderToHandVector = SafeNormalize(kismet_math_library:Subtract_VectorVector(effectorWS, ShoulderWS))
 
 	-- Elbow pole vector:
 	-- Use the baseline elbow direction projected onto the reach plane.
 	-- This keeps the elbow bending in a consistent, "natural" direction instead of flipping.
-
 	if state ~= nil and state.baselineElbowDirCS == nil then
 		local sCS0 = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.ComponentSpace)
 		local jCS0 = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.ComponentSpace)
@@ -1162,42 +1253,35 @@ function Rig:solveTwoBone(solverParams)
 	-- GetRightVector changes with pawn rotation — fetch fresh every tick.
 	local OutwardWS = mesh:GetRightVector()
 	if state ~= nil and state.baselineElbowDirCS ~= nil then
-		local reachCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, Forward))
+		local reachCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, shoulderToHandVector))
 		local poleCS = SafeNormalize(ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS))
 		if kismet_math_library:VSize(poleCS) < 0.0001 then
 			poleCS = VEC_UNIT_Y
 		end
 
-		-- Optional: rotate pole around reach axis based on controller's orientation in the reach plane.
-		-- NOTE: keep this stable: do NOT switch between controller axes per-frame (that flickers).
-		-- If direction is wrong, flip the sign of ELBOW_POLE_TWIST_INFLUENCE.
-		if allowWristAffectsElbow and controllerRotWS ~= nil and ELBOW_POLE_TWIST_INFLUENCE ~= nil and math.abs(ELBOW_POLE_TWIST_INFLUENCE) > 0.0001 then
-			local ctrlCompRot = kismet_math_library:InverseTransformRotation(compToWorld, controllerRotWS)
-			if ctrlCompRot ~= nil then
-				local ctrlUpCS = SafeNormalize(kismet_math_library:GetUpVector(ctrlCompRot))
-				local upProj = (ctrlUpCS ~= nil) and SafeNormalize(ProjectVectorOnToPlane(ctrlUpCS, reachCS)) or nil
-				local upProjLen = (upProj ~= nil) and (kismet_math_library:VSize(upProj) or 0.0) or 0.0
-				-- If the controller up axis is close to the reach axis, projection becomes unstable.
-				-- In that case, hold the last valid projection instead of flipping sign/axis.
-				if upProjLen > 0.25 then
-					state.lastCtrlPoleCS = upProj
-				end
-				local ctrlPoleCS = state.lastCtrlPoleCS
-				if ctrlPoleCS ~= nil and kismet_math_library:VSize(ctrlPoleCS) > 0.0001 then
-					local rawTwistDeg = signedAngleDegAroundAxis(poleCS, ctrlPoleCS, reachCS)
-					if rawTwistDeg ~= nil then
-						rawTwistDeg = kismet_math_library:FClamp(rawTwistDeg, -ELBOW_POLE_TWIST_MAX_DEG, ELBOW_POLE_TWIST_MAX_DEG)
-						local targetApplied = rawTwistDeg * ELBOW_POLE_TWIST_INFLUENCE
-						-- Light smoothing to prevent per-frame bounce.
-						state.poleTwistSmoothedDeg = (state.poleTwistSmoothedDeg or 0.0) + (targetApplied - (state.poleTwistSmoothedDeg or 0.0)) * 0.20
-						local appliedDeg = state.poleTwistSmoothedDeg or 0.0
-						if math.abs(appliedDeg) > 0.01 then
-							local deltaPoleRot = kismet_math_library:RotatorFromAxisAndAngle(reachCS, appliedDeg)
-							poleCS = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(poleCS, deltaPoleRot))
-						end
-					end
-				end
-			end
+		-- Optional: allow wrist rotation to affect elbow rotation. Rotate pole around reach axis based on controller's orientation in the reach plane.
+		if controllerRotCS ~= nil and allowWristAffectsElbow and wristTwistInfluence > 0 then
+            local ctrlUpCS = SafeNormalize(kismet_math_library:GetUpVector(controllerRotCS))
+            local upProj = (ctrlUpCS ~= nil) and SafeNormalize(ProjectVectorOnToPlane(ctrlUpCS, reachCS)) or nil
+            local upProjLen = (upProj ~= nil) and (kismet_math_library:VSize(upProj) or 0.0) or 0.0
+            -- If the controller up axis is close to the reach axis, projection becomes unstable.
+            -- In that case, hold the last valid projection instead of flipping sign/axis.
+            if upProjLen > 0.25 then
+                state.lastCtrlPoleCS = upProj
+            end
+            local ctrlPoleCS = state.lastCtrlPoleCS
+            if ctrlPoleCS ~= nil and kismet_math_library:VSize(ctrlPoleCS) > 0.0001 then
+                local rawTwistDeg = signedAngleDegAroundAxis(poleCS, ctrlPoleCS, reachCS)
+                if rawTwistDeg ~= nil then
+                    rawTwistDeg = (((360 + rawTwistDeg) % 360) - 180) -- prevent discontinuity at -180/180
+                    rawTwistDeg = kismet_math_library:FClamp(rawTwistDeg, -wristTwistMax, wristTwistMax)
+                    local appliedDeg = rawTwistDeg * wristTwistInfluence
+                    if math.abs(appliedDeg) > 0.01 then
+                        local deltaPoleRot = kismet_math_library:RotatorFromAxisAndAngle(reachCS, appliedDeg)
+                        poleCS = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(poleCS, deltaPoleRot))
+                    end
+                end
+            end
 		end
 
 		OutwardWS = SafeNormalize(kismet_math_library:TransformDirection(compToWorld, poleCS))
@@ -1221,7 +1305,7 @@ function Rig:solveTwoBone(solverParams)
 	local JointTargetWS = kismet_math_library:Add_VectorVector(
 		ShoulderWS,
 		kismet_math_library:Add_VectorVector(
-			kismet_math_library:Multiply_VectorFloat(Forward, forwardDist),
+			kismet_math_library:Multiply_VectorFloat(shoulderToHandVector, forwardDist),
 			kismet_math_library:Multiply_VectorFloat(OutwardWS, outwardDist)
 		)
 	)
@@ -1238,26 +1322,27 @@ function Rig:solveTwoBone(solverParams)
         ShoulderWS, JointWS, EndWS,
         JointTargetWS, effectorWS,
         OutJointWS, OutEndWS,
-        AllowStretch, StartStretchRatio, MaxStretchScale
+        allowStretch, startStretchRatio, maxStretchScale
     )
 
 	local smOutJoint = OutJointWS
 	local smOutEnd = OutEndWS
-
+-- print("IK joint WS:", smOutJoint.X, smOutJoint.Y, smOutJoint.Z)
+-- print("IK end   WS:", smOutEnd.X, smOutEnd.Y, smOutEnd.Z)
 
     --------------------------------------------------------------
     -- 6. Reconstruct rotations from solved positions
     --------------------------------------------------------------
-	local UpperDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutJoint, ShoulderWS))
-	local LowerDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutEnd, smOutJoint))
+	local upperDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutJoint, ShoulderWS))
+	local lowerDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutEnd, smOutJoint))
 
 	--------------------------------------------------------------
 	-- 7. Build target rotations in ComponentSpace
 	--------------------------------------------------------------
 	-- Many skeletons do NOT use +X as the "bone points-to-child" axis.
 	-- We calibrate which axis (X/Y/Z with sign) to align, then construct a component-space rot.
-	local upperDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, UpperDirWS))
-	local lowerDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, LowerDirWS))
+	local upperDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, upperDirWS))
+	local lowerDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, lowerDirWS))
 	local poleCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, OutwardWS))
 
 	-- Cache shoulder pole axis selection once.
@@ -1268,7 +1353,6 @@ function Rig:solveTwoBone(solverParams)
 	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
 		state.shoulderPoleAxisChoice = chooseBestPoleAxis(sx, sy, sz, shoulderLong.axis, poleAxisRefCS)
 		state.shoulderPoleAxisForBones = RootBone .. "->" .. JointBone
-        print("here")
 	end
 	local axisShoulder = { pole = state.shoulderPoleAxisChoice }
 
@@ -1283,7 +1367,6 @@ function Rig:solveTwoBone(solverParams)
 	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
 		state.jointPoleAxisChoice = chooseBestPoleAxis(jx, jy, jz, jointLong.axis, poleAxisRefCS)
 		state.jointPoleAxisForBones = bonesKey
-        print("here")
 	end
 	local axisJoint = { pole = state.jointPoleAxisChoice }
 
@@ -1323,58 +1406,80 @@ function Rig:solveTwoBone(solverParams)
 	--------------------------------------------------------------
 	-- Convert the controller's world-space rotation into mesh component space,
 	-- then stamp it directly onto the end bone so the wrist tracks the controller.
-	if controllerRotWS ~= nil then
-		local HandCompRot = kismet_math_library:InverseTransformRotation(compToWorld, controllerRotWS)
-		if HandCompRot ~= nil then
-			--print("HandCompRot before correction:", HandCompRot.Pitch, HandCompRot.Yaw, HandCompRot.Roll)
-			-- Adjust if the wrist still looks wrong (try Roll=0/180, Pitch=0/180, Yaw=0/180).
-            -- endBoneRotation is often 180 roll from left to right hand
-			local finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, HandCompRot)
-			mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
-			if wristBone ~= "" then
-                mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
-            end
+    local finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, controllerRotCS)
+    mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+    if wristBone ~= "" then
+        mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+    end
 
-			--print("HandCompRot after correction:", HandCompRot.Pitch, HandCompRot.Yaw, HandCompRot.Roll)
-			-- ElbowCompRot was just stamped onto JointBone — reuse it directly, no read-back needed.
-			local lowerArmRotCS = ElbowCompRot
+    --print("controllerRotCS after correction:", controllerRotCS.Pitch, controllerRotCS.Yaw, controllerRotCS.Roll)
+    -- ElbowCompRot was just stamped onto JointBone — reuse it directly, no read-back needed.
+    local lowerArmRotCS = ElbowCompRot
 
-			-- Signed angle between elbow and hand around the forearm tube axis.
-			--[[
-				Why this is needed: The hand rolls but that roll cant be appled directly to the forearm because of Pitch/Yaw in the hand with respect to forearm which changes what roll means.
-				If elbowUp == handUp (both pointing the same way, only differing by Roll) → Roll is the tube angle. Valid.
-				The moment their forwards diverge (wrist pitched/yawed relative to elbow) → the Euler decomposition picks a different Pitch/Yaw/Roll split to represent the same physical rotation, and Roll absorbs some of the swing. It's no longer the tube angle.
-				The atan(dot(axis, cross), dot(up,up)) is essentially computing the same thing as Roll would be in the locked case — but geometrically, so it remains correct regardless of what Pitch and Yaw are doing. The up-vector approach is just "what Roll means, without the assumption that Pitch and Yaw are zero."
-			]]--
-			local twistAngleDeg = math:computeSignedAngleAroundAxis_Rotators(lowerArmRotCS, finalHandCompRot, lowerDirCS)
-			---------------------------------------------
+    ---------------------------------------------
 
-			if state ~= nil and lowerArmRotCS ~= nil then
-				for _, entry in ipairs(twistBones) do
-					--if not entry._fname then entry._fname = uevrUtils.fname_from_string(entry.bone) end
-					--print(entry.bone, entry.fraction)
-					local boneFName = uevrUtils.fname_from_string(entry.bone)
-					local vecs = state.twistBoneVecs and state.twistBoneVecs[entry.bone]
-					if vecs == nil then break end
+	if state ~= nil and lowerArmRotCS ~= nil and #twistBones > 0 then
+		-- Extract the wrist→forearm "tube twist" (pronation/supination) around the forearm axis.
+		-- We use a quaternion swing–twist decomposition of the relative rotation (lowerArmRotCS -> finalHandCompRot)
+		-- so wrist pitch/yaw doesn't leak into the twist value.
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Lower arm rot CS:", lowerArmRotCS.Pitch, lowerArmRotCS.Yaw, lowerArmRotCS.Roll) end
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Final hand comp rot:", finalHandCompRot.Pitch, finalHandCompRot.Yaw, finalHandCompRot.Roll) end
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Lower dir CS:", lowerDirCS.X, lowerDirCS.Y, lowerDirCS.Z) end
+		local twistAngleDeg = computeTwistDegAroundAxis_Rotators(lowerArmRotCS, finalHandCompRot, lowerDirCS)
+		-- -- Twist direction convention: for this rig/controller mapping, negate to match physical wrist roll.
+		-- if twistAngleDeg ~= nil then
+		-- 	twistAngleDeg = -twistAngleDeg
+		-- end
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Forearm twist angle deg:", twistAngleDeg) end
+		twistAngleDeg = normalizeDeg180(twistAngleDeg)
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Forearm twist angle deg 2:", twistAngleDeg) end
+		-- Unwrap against the last *applied* twist (clamped), to avoid the cached value drifting by full turns.
+		-- local prevTwistDeg = state.lastForearmTwistDegApplied or state.lastForearmTwistDegUnwrapped
+		-- if prevTwistDeg ~= nil then
+		-- 	twistAngleDeg = unwrapDeg(twistAngleDeg, prevTwistDeg)
+		-- end
+		-- state.lastForearmTwistDegUnwrapped = twistAngleDeg
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Forearm twist angle deg: 3", twistAngleDeg) end
 
-					-- Step 1: bring stored bone-local axes into current component space.
-					-- GreaterGreater_VectorRotator(v_local, rot) = pure matrix multiply, no Euler decomposition.
-					local xCS = kismet_math_library:GreaterGreater_VectorRotator(vecs.x, lowerArmRotCS)
-					local zCS = kismet_math_library:GreaterGreater_VectorRotator(vecs.z, lowerArmRotCS)
+		-- Clamp to physically plausible forearm pronation/supination.
+		local twistMax = forearmTwistMax or wristTwistMax or FOREARM_TWIST_MAX_DEG_DEFAULT
 
-					-- Step 2: rotate both axes around the forearm tube axis by the fractional angle.
-					local tubeRot = kismet_math_library:RotatorFromAxisAndAngle(lowerDirCS, twistAngleDeg * entry.fraction)
-					xCS = kismet_math_library:GreaterGreater_VectorRotator(xCS, tubeRot)
-					zCS = kismet_math_library:GreaterGreater_VectorRotator(zCS, tubeRot)
-
-					-- Step 3: reconstruct CS rotation from two vectors — no Euler composition at all.
-					local finalCS = kismet_math_library:MakeRotFromXZ(xCS, zCS)
-					mesh:SetBoneRotationByName(boneFName, finalCS, EBoneSpaces.ComponentSpace)
-				end
-			end
+		local appliedTwistDeg = twistAngleDeg
+		if appliedTwistDeg ~= nil and twistMax ~= nil then
+			appliedTwistDeg = kismet_math_library:FClamp(appliedTwistDeg, -twistMax, twistMax)
 		end
 
-	end
+		-- state.lastForearmTwistDegApplied = appliedTwistDeg
+		twistAngleDeg = appliedTwistDeg
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Forearm twist angle deg: 4", twistAngleDeg) end
+
+		if twistAngleDeg == nil or math.abs(twistAngleDeg) < IK_MIN_TWIST_DEG then
+			return
+		end
+--if solverParams.hand == Handed.Left and stopDebug == false then print("Forearm twist angle deg: 5", twistAngleDeg) end
+
+        for _, entry in ipairs(twistBones) do
+            --if not entry._fname then entry._fname = uevrUtils.fname_from_string(entry.bone) end
+            --print(entry.bone, entry.fraction)
+            local boneFName = uevrUtils.fname_from_string(entry.bone)
+            local vecs = state.twistBoneVecs and state.twistBoneVecs[entry.bone]
+            if vecs == nil then break end
+
+            -- Step 1: bring stored bone-local axes into current component space.
+            -- GreaterGreater_VectorRotator(v_local, rot) = pure matrix multiply, no Euler decomposition.
+            local xCS = kismet_math_library:GreaterGreater_VectorRotator(vecs.x, lowerArmRotCS)
+            local zCS = kismet_math_library:GreaterGreater_VectorRotator(vecs.z, lowerArmRotCS)
+
+            -- Step 2: rotate both axes around the forearm tube axis by the fractional angle.
+            local tubeRot = kismet_math_library:RotatorFromAxisAndAngle(lowerDirCS, twistAngleDeg * entry.fraction)
+            xCS = kismet_math_library:GreaterGreater_VectorRotator(xCS, tubeRot)
+            zCS = kismet_math_library:GreaterGreater_VectorRotator(zCS, tubeRot)
+
+            -- Step 3: reconstruct CS rotation from two vectors — no Euler composition at all.
+            local finalCS = kismet_math_library:MakeRotFromXZ(xCS, zCS)
+            mesh:SetBoneRotationByName(boneFName, finalCS, EBoneSpaces.ComponentSpace)
+        end
+    end
 end
 Rig.solveTwoBone = uevrUtils.profiler:wrap("solveTwoBone", Rig.solveTwoBone)
 
@@ -1547,6 +1652,9 @@ function Rig:setActive(solverId, value)
                 allowStretch = solverParams["allow_stretch"] or false,
                 startStretchRatio = solverParams["start_stretch_ratio"] or 0.0,
                 maxStretchScale = solverParams["max_stretch_scale"] or 0.0,
+                wristTwistInfluence = solverParams["wrist_twist_influence"] or 0.35,
+                wristTwistMax = solverParams["wrist_twist_max"] or 75,
+				forearmTwistMax = solverParams["forearm_twist_max"] or FOREARM_TWIST_MAX_DEG_DEFAULT,
                 twistBones = solverParams["twist_bones"] or {},
 				smoothing = solverParams["smoothing"] or 0.0,
                 --invertForearmRoll = solverParams["invert_forearm_roll"] or false,

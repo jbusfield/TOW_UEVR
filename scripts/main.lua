@@ -220,7 +220,7 @@ local function getWeaponMesh()
 		local currentWeapon = pawn:GetCurrentWeapon()
 		local anim = uevrUtils.getValid(pawn, {"FPVMesh","AnimScriptInstance"})
 		local holstered = anim and anim.bWeaponIsHolstered
-		if currentWeapon ~= nil and not holstered then 
+		if currentWeapon ~= nil and not holstered then
 			local weaponMesh = currentWeapon.SkeletalMeshComponent
 			if weaponMesh ~= nil then
 				--some games mess with the weapon FOV and that needs to be fixed programatically
@@ -254,18 +254,30 @@ attachments.registerOnGripUpdateCallback(function()
 	--return getWeaponMesh(), controllers.getController(Handed.Right)
 end)
 
-local function handleHands(value)
-    hands.setAutoCreateHands(value == 1)
+local HandsType = {
+	Forearms = 1,
+	IKArms = 2,
+}
+local function regenerateHands(value)
+	--detach attachments first so they dont get "lost" when hands are destroyed
+	attachments.detachGripAttachments(Handed.Right)
+	attachments.detachGripAttachments(Handed.Left)
+
+	-- only allow autocreate of hands if using forearms
+    hands.setAutoCreateHands(value == HandsType.Forearms)
+
     hands.destroyHands()
     ik.destroyAll()
+
+	-- forearms will autocreate if value == 1 or create IK if value == 2
     status["ikMeshComponent"] = nil
-    if value == 2 then
+    if value == HandsType.IKArms then
         ik.new({ animationsFile = "hands_parameters" })
     end
 end
 
 configui.onUpdate("hands_type", function(value)
-    handleHands(value)
+    regenerateHands(value)
 end)
 
 ik.registerOnMeshCreatedCallback(function(meshComponent, ikInstance)
@@ -284,14 +296,15 @@ function on_level_change(level)
 	--print("Level changed\n")
 	flickerFixer.create()
 	setIdleCameraTimeout()
-	handleHands(configui.getValue("hands_type"))
+	regenerateHands(configui.getValue("hands_type"))
 
 end
 
 --when leaving the inventory, destroy the current hands so if gloves changed the new ones are created
 ui.registerWidgetChangeCallback("Ledger_BP_C", function(active)
 	if not active then
-        hands.destroyHands()
+		regenerateHands(configui.getValue("hands_type"))
+        --hands.destroyHands()
 	end
 end)
 
@@ -309,7 +322,7 @@ end)
 local function fixWeaponFXFOV()
 	local propertyName = "ForegroundPriorityEnabled"
 	local value = 0.0
-	
+
 	if pawn.GetCurrentWeapon ~= nil then
 		local weapon = pawn:GetCurrentWeapon()
 		if weapon ~= nil  then
@@ -317,7 +330,7 @@ local function fixWeaponFXFOV()
 			if mesh ~= nil then
 				local children = mesh.AttachChildren
 				if children ~= nil then
-					for i, child in ipairs(children) do				
+					for i, child in ipairs(children) do
 						if child:is_a(uevrUtils.get_class("Class /Script/Niagara.NiagaraComponent")) then
 							child:SetNiagaraVariableFloat(propertyName, value)
 							--print("Child Niagara Material:", child:get_full_name(),"\n")
@@ -350,7 +363,7 @@ attachments.registerAttachmentChangeCallback(function(id, hand, attachment)
 			--To correct this we override pawn rotation mode to "Right Controller". This of course
 			--means right controller controls pawn movement direction while the grenade launcher is equipped
 			--but since its not a melee weapon, it seems like a good compromise.
-			input.setOverridePawnRotationMode( input.PawnRotationMode.RIGHT_CONTROLLER)
+			--input.setOverridePawnRotationMode( input.PawnRotationMode.RIGHT_CONTROLLER)
 		end
 	end
 
@@ -419,7 +432,8 @@ setInterval(1000, function()
 		--print("Disguise changed to:", disguise)
 		if disguise == nil then
 			delay(100, function()
-				hands.destroyHands()
+				regenerateHands(configui.getValue("hands_type"))
+				--hands.destroyHands()
 				--hands.reapplyMaterials()
 			end)
 		end
@@ -1020,7 +1034,7 @@ configui.create(configDefinition)
 -- 			local finalHandCompRot = kismet_math_library:ComposeRotators(HAND_CORRECTION, HandCompRot)
 -- 			mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
 -- 			mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
-			
+
 
 -- 			--print("HandCompRot after correction:", HandCompRot.Pitch, HandCompRot.Yaw, HandCompRot.Roll)
 -- 			-- ElbowCompRot was just stamped onto JointBone — reuse it directly, no read-back needed.
@@ -1272,3 +1286,7 @@ uevr.params.sdk.callbacks.on_script_reset(function()
 	end
 	status["ikMeshComponent"] = nil
 end)
+
+-- register_key_bind("F2", function()
+-- 	stopDebug = true
+-- end)

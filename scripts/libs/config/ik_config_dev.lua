@@ -47,6 +47,8 @@ local solverDefaults = {
     --invert_forearm_roll = false,
 	sort_order = 0,
 	smoothing = 0,
+    wrist_twist_influence = 0.35,
+    wrist_twist_max = 75.0,
 }
 
 local meshList = {}
@@ -316,6 +318,22 @@ local function getConfigWidgets(m_paramManager)
 							id = widgetPrefix .. "allow_wrist_affects_elbow",
 							label = "Allow Wrist Affects Elbow",
 							initialValue = false
+						},
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "wrist_twist_influence",
+							label = "Wrist Twist Influence",
+							speed = 0.01,
+							range = {0, 1},
+							initialValue = 0.35
+						},
+						{
+							widgetType = "slider_float",
+							id = widgetPrefix .. "wrist_twist_max",
+							label = "Wrist Twist Max Degrees",
+							speed = 1,
+							range = {0, 120},
+							initialValue = 75.0
 						},
 						{
 							widgetType = "checkbox",
@@ -894,6 +912,16 @@ end)
 configui.onUpdate(widgetPrefix .. "label", function(value)
 	--change the label of the currently selected solver
 	updateSolverSelectionUI(getActiveRigParams())
+end)
+
+configui.onUpdate(widgetPrefix .. "allow_wrist_affects_elbow", function(value)
+    configui.setHidden(widgetPrefix .. "wrist_twist_influence", not value)
+    configui.setHidden(widgetPrefix .. "wrist_twist_max", not value)
+end)
+
+configui.onUpdate(widgetPrefix .. "allow_stretch", function(value)
+    configui.setHidden(widgetPrefix .. "start_stretch_ratio", not value)
+    configui.setHidden(widgetPrefix .. "max_stretch_scale", not value)
 end)
 
 local function updateTwistBones()
