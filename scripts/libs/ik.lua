@@ -272,6 +272,13 @@ local function newIKState()
 		bonesKey = nil,            -- JointBone.."->"..EndBone     — never changes per call site
 		-- Smoothed controller target offset in component space (from shoulder).
 		lastEffectorOffsetCS = nil,
+		-- Smoothed IK direction vectors and pole — suppress per-tick numerical noise that drives
+		-- micro-oscillation in the alignment twist correction.
+		smUpperDirCS = nil,
+		smLowerDirCS = nil,
+		smPoleCS = nil,
+		lastShoulderCompRot = nil, -- cached per-tick; used to suppress animation override passthrough
+		lastControllerRotWS = nil, -- smoothed WS controller rotation; used to compute compToWorld-independent EndBone WS stamp
 		-- Last measured forearm tube twist (degrees), unwrapped for continuity.
 		--lastForearmTwistDegUnwrapped = nil,
 		-- Last applied forearm tube twist (degrees).
@@ -462,6 +469,16 @@ function Rig:initializeRigState()
 		local mesh = uevrUtils.createPoseableMeshFromSkeletalMesh(meshTemplate, {useDefaultPose = true, showDebug=false})
 		if mesh ~= nil then
 			self.mesh = mesh
+			-- local springArm = uevrUtils.create_component_of_class("Class /Script/Engine.SpringArmComponent")
+			-- springArm.TargetArmLength = 0
+			-- springArm.bEnableCameraLag = true
+			-- springArm.CameraLagSpeed = 20.0
+			-- springArm.bEnableCameraRotationLag = true
+			-- springArm.CameraRotationLagSpeed = 5.0
+			-- springArm.bUsePawnControlRotation = false
+			-- --controllers.attachComponentToController(2, self.mesh, "", 0, false, true)
+			-- controllers.attachComponentToController(2, springArm, "", 0, false, true)
+			-- self.mesh:K2_AttachTo(springArm, uevrUtils.fname_from_string(""), 0, false)
 			self.mesh:K2_AttachTo(rootComponent, uevrUtils.fname_from_string(""), 0, false)
 			self.mesh:SetVisibility(true, true)
 			self.mesh:SetHiddenInGame(false, true)
@@ -585,6 +602,7 @@ local keyMap = {
     wrist_twist_max = "wristTwistMax",
 	forearm_twist_max = "forearmTwistMax",
     smoothing = "smoothing",
+    rot_smoothing = "rotSmoothing",
     end_control_type = "hand",
     twist_bones = "twistBones",
 --    invert_forearm_roll = "invertForearmRoll",
@@ -806,8 +824,10 @@ function Rig:create()
 	end
 	if self.tickPhase == "pre" then
 		uevrUtils.registerPreEngineTickCallback(self.tickFn, self.tickPriority)
-	else
+	elseif self.tickPhase == "post" then
 		uevrUtils.registerPostEngineTickCallback(self.tickFn, self.tickPriority)
+	else
+		setInterval(50, self.tickFn)
 	end
 
 	--get solvers from params and find any that have the active param = true
@@ -1010,6 +1030,7 @@ local function composeTwistWithCachedOrder(state, swingRot, deltaTwist, desiredD
 	return (state ~= nil and state.composeOrderTwist) and t2 or t1
 end
 
+--local _dbg_ik_align_label = nil   -- set by solveTwoBone; read by alignBoneAxisToDirCS
 local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS, axisChoice, poleCS, state)
 	local currentRot = mesh:GetBoneRotationByName(boneName, EBoneSpaces.ComponentSpace)
     if currentRot == nil then return nil end
@@ -1028,6 +1049,10 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	if desiredDir == nil or kismet_math_library:VSize(desiredDir) < 0.0001 then
 		return currentRot
 	end
+
+	-- if stopDebug == false and _dbg_ik_align_label ~= nil then
+	-- 	print("IK align", _dbg_ik_align_label, "curDir:", currentDir.X, currentDir.Y, currentDir.Z)
+	-- end
 
 	-- 2) Swing: rotate currentDir -> desiredDir.
 	local dot = kismet_math_library:Dot_VectorVector(currentDir, desiredDir) or 1.0
@@ -1057,15 +1082,37 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	local poleAxisSign = poleAxisChoice.sign or 1
     --poleAxisSign = -poleAxisSign
 
-	local desiredPole = SafeNormalize(ProjectVectorOnToPlane(poleCS, desiredDir))
-	if desiredPole == nil or kismet_math_library:VSize(desiredPole) < 0.0001 then return swingRot end
+	-- Check raw projection length BEFORE normalizing.
+	-- When poleCS is nearly parallel/antiparallel to desiredDir (bone pointing toward face),
+	-- the raw projection is near-zero; normalizing it amplifies noise and causes ±180° sign-flip oscillation.
+	-- Threshold 0.15 ≈ skipping when |dot(poleCS, desiredDir)| > 0.989 (within ~8.5° of parallel).
+	local rawDesiredPole = ProjectVectorOnToPlane(poleCS, desiredDir)
+	local rawDesiredPoleLen = (rawDesiredPole ~= nil) and kismet_math_library:VSize(rawDesiredPole) or 0.0
+	if rawDesiredPoleLen < 0.15 then return swingRot end
+	local desiredPole = kismet_math_library:Divide_VectorFloat(rawDesiredPole, rawDesiredPoleLen)
+	if desiredPole == nil then return swingRot end
 
 	local poleAxisVec = axisVectorFromRotator(swingRot, poleAxisChar)
 	if poleAxisVec == nil then return swingRot end
-	local currentPole = SafeNormalize(ProjectVectorOnToPlane(mulVec(poleAxisVec, poleAxisSign), desiredDir))
-	if currentPole == nil or kismet_math_library:VSize(currentPole) < 0.0001 then return swingRot end
+	local rawCurrentPole = ProjectVectorOnToPlane(mulVec(poleAxisVec, poleAxisSign), desiredDir)
+	local rawCurrentPoleLen = (rawCurrentPole ~= nil) and kismet_math_library:VSize(rawCurrentPole) or 0.0
+	if rawCurrentPoleLen < 0.15 then return swingRot end
+	local currentPole = kismet_math_library:Divide_VectorFloat(rawCurrentPole, rawCurrentPoleLen)
+	if currentPole == nil then return swingRot end
+
+	-- local desiredPole = SafeNormalize(ProjectVectorOnToPlane(poleCS, desiredDir))
+	-- if desiredPole == nil or kismet_math_library:VSize(desiredPole) < 0.0001 then return swingRot end
+	-- local poleAxisVec = axisVectorFromRotator(swingRot, poleAxisChar)
+	-- if poleAxisVec == nil then return swingRot end
+	-- local currentPole = SafeNormalize(ProjectVectorOnToPlane(mulVec(poleAxisVec, poleAxisSign), desiredDir))
+	-- if currentPole == nil or kismet_math_library:VSize(currentPole) < 0.0001 then return swingRot end
+
 
 	local twistAngleDeg = signedAngleDegAroundAxis(currentPole, desiredPole, desiredDir)
+	-- if stopDebug == false and _dbg_ik_align_label ~= nil then
+	-- 	print("IK align", _dbg_ik_align_label, "twistDeg:", (twistAngleDeg or "nil"), "poleAxis:", poleAxisChar, poleAxisSign)
+	-- 	print("IK align", _dbg_ik_align_label, "curPole:", currentPole.X, currentPole.Y, currentPole.Z, "desPole:", desiredPole.X, desiredPole.Y, desiredPole.Z)
+	-- end
 	if twistAngleDeg == nil or math.abs(twistAngleDeg) < IK_MIN_TWIST_DEG then return swingRot end
 
 	local deltaTwist = kismet_math_library:RotatorFromAxisAndAngle(desiredDir, twistAngleDeg)
@@ -1120,6 +1167,7 @@ local function getTargetLocationAndRotation(hand, controller)
 end
 
 --stopDebug = false
+local count = 0
 function Rig:solveTwoBone(solverParams)
     -- mesh,               -- UPoseableMeshComponent
     -- RootBone,           -- e.g. "UpperArm_L"
@@ -1164,7 +1212,8 @@ function Rig:solveTwoBone(solverParams)
         print("solveTwoBone: Missing controller position/rotation")
 		return
 	end
-	--print(ControllerRotWS.Pitch, ControllerRotWS.Yaw, ControllerRotWS.Roll)
+	-- if solverParams.hand == Handed.Right and stopDebug == false then print("Controller rot:",controllerRotWS.Pitch, controllerRotWS.Yaw, controllerRotWS.Roll) end
+	-- if solverParams.hand == Handed.Right and stopDebug == false then print("Controller pos:",controllerPosWS.X, controllerPosWS.Y, controllerPosWS.Z) end
 
     --------------------------------------------------------------
     -- 1. Component transform + shoulder position (fail-fast)
@@ -1182,6 +1231,20 @@ function Rig:solveTwoBone(solverParams)
 	local ShoulderWS = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.WorldSpace)
 	if ShoulderWS == nil then return end
 
+	local ShoulderCS = mesh:GetBoneRotationByName(RootBone, EBoneSpaces.ComponentSpace)
+	if solverParams.hand == Handed.Left and count < 5 then
+		print("ShoulderCS:", count, ShoulderCS.Pitch, ShoulderCS.Yaw, ShoulderCS.Roll)
+		count = count + 1
+	end
+
+	-- if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 	print("ShoulderWS:", ShoulderWS.X, ShoulderWS.Y, ShoulderWS.Z)
+	-- end
+
+	-- if state.lastEndLocationWS ~= nil then
+	-- 	mesh:SetBoneLocationByName(EndBone, state.lastEndLocationWS, EBoneSpaces.WorldSpace)
+	-- 	state.lastEndLocationWS = nil
+	-- end
 
     --------------------------------------------------------------
     -- 2. Compute Effector (hand target)
@@ -1200,7 +1263,10 @@ function Rig:solveTwoBone(solverParams)
 		end
 		effectorWS = kismet_math_library:Add_VectorVector(controllerPosWS, offsetWS)
 	end
-    local controllerRotCS = kismet_math_library:InverseTransformRotation(compToWorld, controllerRotWS)
+--[[
+	InverseTransformRotation(compToWorld, controllerRotWS) amplifies the 0.036° of real controller movement into 0.220° by inheriting compToWorld's per-tick rotational noise. The noise is entirely in that one conversion. endBoneRotation is static, so ComposeRotators passes it straight through to the stamp.
+]]--    
+	local controllerRotCS = kismet_math_library:InverseTransformRotation(compToWorld, controllerRotWS)
 
 	-- Smooth controller target in component-space offset from shoulder.
 	-- This damps root-motion/head-turn jitter without smoothing final solved outputs.
@@ -1254,10 +1320,26 @@ function Rig:solveTwoBone(solverParams)
 	local OutwardWS = mesh:GetRightVector()
 	if state ~= nil and state.baselineElbowDirCS ~= nil then
 		local reachCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, shoulderToHandVector))
-		local poleCS = SafeNormalize(ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS))
-		if kismet_math_library:VSize(poleCS) < 0.0001 then
-			poleCS = VEC_UNIT_Y
+		-- Same singularity guard as in alignBoneAxisToDirCS:
+		-- When the reach direction is nearly parallel to the baseline elbow direction,
+		-- the raw projection is near-zero; SafeNormalize would amplify noise and flip the pole sign.
+		-- Hold the last valid pole instead of producing a garbage vector.
+		local rawPoleCS = ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS)
+		local rawPoleLen = (rawPoleCS ~= nil) and kismet_math_library:VSize(rawPoleCS) or 0.0
+		local poleCS
+		if rawPoleLen >= 0.15 then
+			poleCS = kismet_math_library:Divide_VectorFloat(rawPoleCS, rawPoleLen)
+			state.lastValidPoleCS = poleCS
+		else
+			-- Left arm natural elbow direction is -Y (outward to the left); right arm is +Y.
+			local handFallbackPole = (solverParams.hand == Handed.Left) and (VEC_UNIT_Y_INVERSE or uevrUtils.vector(0, -1, 0)) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
+			poleCS = state.lastValidPoleCS or handFallbackPole
 		end
+
+		-- local poleCS = SafeNormalize(ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS))
+		-- if kismet_math_library:VSize(poleCS) < 0.0001 then
+		-- 	poleCS = VEC_UNIT_Y
+		-- end
 
 		-- Optional: allow wrist rotation to affect elbow rotation. Rotate pole around reach axis based on controller's orientation in the reach plane.
 		if controllerRotCS ~= nil and allowWristAffectsElbow and wristTwistInfluence > 0 then
@@ -1327,8 +1409,12 @@ function Rig:solveTwoBone(solverParams)
 
 	local smOutJoint = OutJointWS
 	local smOutEnd = OutEndWS
--- print("IK joint WS:", smOutJoint.X, smOutJoint.Y, smOutJoint.Z)
--- print("IK end   WS:", smOutEnd.X, smOutEnd.Y, smOutEnd.Z)
+	-- if smOutJoint ~= nil and smOutEnd ~= nil then
+	-- 	if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 		print("IK joint WS:", smOutJoint.X, smOutJoint.Y, smOutJoint.Z)
+	-- 		print("IK end   WS:", smOutEnd.X, smOutEnd.Y, smOutEnd.Z)
+	-- 	end
+	-- end
 
     --------------------------------------------------------------
     -- 6. Reconstruct rotations from solved positions
@@ -1345,12 +1431,46 @@ function Rig:solveTwoBone(solverParams)
 	local lowerDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, lowerDirWS))
 	local poleCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, OutwardWS))
 
+	if smoothing > 0 then
+		-- Normalized lerp (NLERP) to suppress per-tick noise in IK directions and pole.
+		-- Directions use a light touch (20% old / 80% new) so arm tracking stays responsive.
+		-- Pole uses stronger smoothing (40% old / 60% new) — it only drives elbow orientation,
+		-- not hand position, so a tiny lag is perfectly acceptable there.
+		local function nlerpSmoothDir(prev, curr, alpha)
+			-- alpha = weight of OLD value.  0 = no smoothing, 1 = frozen.
+			if prev == nil then return curr end
+			local mixed = kismet_math_library:Add_VectorVector(
+				kismet_math_library:Multiply_VectorFloat(prev, alpha),
+				kismet_math_library:Multiply_VectorFloat(curr, 1.0 - alpha)
+			)
+			local len = kismet_math_library:VSize(mixed)
+			if len == nil or len < 0.0001 then return curr end
+			return kismet_math_library:Divide_VectorFloat(mixed, len)
+		end
+
+		upperDirCS = nlerpSmoothDir(state.smUpperDirCS, upperDirCS, 0.2)
+		state.smUpperDirCS = upperDirCS
+
+		lowerDirCS = nlerpSmoothDir(state.smLowerDirCS, lowerDirCS, 0.2)
+		state.smLowerDirCS = lowerDirCS
+
+		poleCS = nlerpSmoothDir(state.smPoleCS, poleCS, 0.4)
+		state.smPoleCS = poleCS
+	end
+
+	-- if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 	print("IK dirCS upper:", upperDirCS.X, upperDirCS.Y, upperDirCS.Z)
+	-- 	print("IK dirCS lower:", lowerDirCS.X, lowerDirCS.Y, lowerDirCS.Z)
+	-- 	print("IK poleCS:", poleCS.X, poleCS.Y, poleCS.Z)
+	-- end
+
 	-- Cache shoulder pole axis selection once.
 	if state.shoulderPoleAxisForBones ~= (RootBone .. "->" .. JointBone) or state.shoulderPoleAxisChoice == nil then
 		local rootDir = getBoneDirCS(mesh, RootBone, JointBone)
 		local sx, sy, sz = axisVectorsFromRot(mesh:GetBoneRotationByName(RootBone, EBoneSpaces.ComponentSpace))
 		local shoulderLong = chooseBestAxis(sx, sy, sz, rootDir)
-	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
+		local handFallbackPoleRef = (solverParams.hand == Handed.Left) and (VEC_UNIT_Y_INVERSE or uevrUtils.vector(0, -1, 0)) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
+	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or handFallbackPoleRef
 		state.shoulderPoleAxisChoice = chooseBestPoleAxis(sx, sy, sz, shoulderLong.axis, poleAxisRefCS)
 		state.shoulderPoleAxisForBones = RootBone .. "->" .. JointBone
 	end
@@ -1364,7 +1484,8 @@ function Rig:solveTwoBone(solverParams)
 		local jointDir = getBoneDirCS(mesh, JointBone, EndBone)
 		local jx, jy, jz = axisVectorsFromRot(mesh:GetBoneRotationByName(JointBone, EBoneSpaces.ComponentSpace))
 		local jointLong = chooseBestAxis(jx, jy, jz, jointDir)
-	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
+		local handFallbackPoleRef = (solverParams.hand == Handed.Left) and (VEC_UNIT_Y_INVERSE or uevrUtils.vector(0, -1, 0)) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
+	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or handFallbackPoleRef
 		state.jointPoleAxisChoice = chooseBestPoleAxis(jx, jy, jz, jointLong.axis, poleAxisRefCS)
 		state.jointPoleAxisForBones = bonesKey
 	end
@@ -1378,12 +1499,52 @@ function Rig:solveTwoBone(solverParams)
 		composeOrderSwing = state.composeOrderSwingShoulder,
 		composeOrderTwist = state.composeOrderTwistShoulder,
 	}
+	-- _dbg_ik_align_label = (solverParams.hand == Handed.Right and stopDebug == false) and "shoulder" or nil
+	-- if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 	local preShoulderRot = mesh:GetBoneRotationByName(RootBone, EBoneSpaces.ComponentSpace)
+	-- 	if preShoulderRot ~= nil then
+	-- 		print("Shoulder bone CS pre-align:", preShoulderRot.Pitch, preShoulderRot.Yaw, preShoulderRot.Roll)
+	-- 	end
+	-- end
+
+	if smoothing > 0 then
+		-- Pre-set shoulder to last IK value so alignBoneAxisToDirCS reads our output, not the animation override.
+		-- Without this: when animation snaps the bone and curDir ≈ upperDirCS (swing < IK_MIN_SWING_DEG),
+		-- the function returns currentRot unchanged — passing animation noise straight through to the output.
+		if state.lastShoulderCompRot ~= nil then
+			mesh:SetBoneRotationByName(RootBone, state.lastShoulderCompRot, EBoneSpaces.ComponentSpace)
+		end
+	end
+
 	local ShoulderCompRot = alignBoneAxisToDirCS(mesh, RootBone, JointBone, upperDirCS, axisShoulder, poleCS, shoulderAlignState)
 	state.composeOrderSwingShoulder = shoulderAlignState.composeOrderSwing
 	state.composeOrderTwistShoulder = shoulderAlignState.composeOrderTwist
 	if ShoulderCompRot ~= nil then
- 		mesh:SetBoneRotationByName(RootBone, ShoulderCompRot, EBoneSpaces.ComponentSpace)
+		if smoothing > 0 then
+			-- Blend to suppress per-tick variation from animation-driven curDir (prevents chain cascade position jitter).
+			if state.lastShoulderCompRot ~= nil then
+				local a = 1 * (1 - smoothing)
+				ShoulderCompRot = uevrUtils.rotator(
+					---@diagnostic disable-next-line: undefined-field
+					state.lastShoulderCompRot.Pitch + normalizeDeg180(ShoulderCompRot.Pitch - state.lastShoulderCompRot.Pitch) * a,
+					---@diagnostic disable-next-line: undefined-field
+					state.lastShoulderCompRot.Yaw   + normalizeDeg180(ShoulderCompRot.Yaw   - state.lastShoulderCompRot.Yaw)   * a,
+					---@diagnostic disable-next-line: undefined-field
+					state.lastShoulderCompRot.Roll  + normalizeDeg180(ShoulderCompRot.Roll  - state.lastShoulderCompRot.Roll)  * a)
+			end
+			mesh:SetBoneRotationByName(RootBone, ShoulderCompRot, EBoneSpaces.ComponentSpace)
+			state.lastShoulderCompRot = ShoulderCompRot
+		else
+ 			mesh:SetBoneRotationByName(RootBone, ShoulderCompRot, EBoneSpaces.ComponentSpace)
+		end
 	end
+
+	-- if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 	local dbgJointCS = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.ComponentSpace)
+	-- 	if dbgJointCS ~= nil then
+	-- 		print("IK dbg joint CS post-shoulder:", dbgJointCS.X, dbgJointCS.Y, dbgJointCS.Z)
+	-- 	end
+	-- end
 
 	-- IMPORTANT: compute elbow AFTER applying shoulder.
 	-- The joint's ComponentSpace basis changes when the parent rotates; using the pre-shoulder joint basis
@@ -1392,26 +1553,99 @@ function Rig:solveTwoBone(solverParams)
 		composeOrderSwing = state.composeOrderSwingElbow,
 		composeOrderTwist = state.composeOrderTwistElbow,
 	}
+	--_dbg_ik_align_label = (solverParams.hand == Handed.Right and stopDebug == false) and "elbow" or nil
+	if smoothing > 0 then
+		-- Pre-set elbow to last IK value for the same reason as shoulder above.
+		if state.lastElbowCompRot ~= nil then
+			mesh:SetBoneRotationByName(JointBone, state.lastElbowCompRot, EBoneSpaces.ComponentSpace)
+		end
+	end
+
 	local ElbowCompRot = alignBoneAxisToDirCS(mesh, JointBone, EndBone, lowerDirCS, axisJoint, poleCS, elbowAlignState)
+	--_dbg_ik_align_label = nil
 	state.composeOrderSwingElbow = elbowAlignState.composeOrderSwing
 	state.composeOrderTwistElbow = elbowAlignState.composeOrderTwist
 	if ElbowCompRot ~= nil then
+		if smoothing > 0 then
+			-- Same blend as shoulder to stabilise end-bone position.
+			if state ~= nil and state.lastElbowCompRot ~= nil then
+				local a = 1 * (1 - smoothing)
+				ElbowCompRot = uevrUtils.rotator(
+					state.lastElbowCompRot.Pitch + normalizeDeg180(ElbowCompRot.Pitch - state.lastElbowCompRot.Pitch) * a,
+					state.lastElbowCompRot.Yaw   + normalizeDeg180(ElbowCompRot.Yaw   - state.lastElbowCompRot.Yaw)   * a,
+					state.lastElbowCompRot.Roll  + normalizeDeg180(ElbowCompRot.Roll  - state.lastElbowCompRot.Roll)  * a)
+			end
+		end
 		mesh:SetBoneRotationByName(JointBone, ElbowCompRot, EBoneSpaces.ComponentSpace)
 		-- Cache last lower-axis for next tick to improve stability if needed.
 		if state then state.lastLowerDirCS = lowerDirCS; state.lastElbowCompRot = ElbowCompRot end
 	end
 
+	-- local endBonePosition = mesh:GetBoneLocationByName(EndBone, EBoneSpaces.ComponentSpace)
+	-- local endBoneRotationOut = mesh:GetBoneRotationByName(EndBone, EBoneSpaces.ComponentSpace)
+	-- if endBonePosition ~= nil then
+	-- 	if solverParams.hand == Handed.Right and stopDebug == false then
+	-- 		print("End bone pos CS before:", endBonePosition.X, endBonePosition.Y, endBonePosition.Z)
+	-- 		print("End bone rot CS before:", endBoneRotationOut.Pitch, endBoneRotationOut.Yaw, endBoneRotationOut.Roll)
+	-- 	end
+	-- end
 	--------------------------------------------------------------
 	-- 9. Apply controller rotation to hand/wrist bone and twist forarm bones
 	--------------------------------------------------------------
-	-- Convert the controller's world-space rotation into mesh component space,
-	-- then stamp it directly onto the end bone so the wrist tracks the controller.
-    local finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, controllerRotCS)
-    mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
-    if wristBone ~= "" then
-        mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
-    end
-
+	local finalHandCompRot = nil
+	if smoothing > 0 then
+		-- WHY WS smoothing + WS stamp:
+		-- Smoothing controllerRotCS (CS) embeds compToWorld noise because
+		--   controllerRotCS = InverseTransformRotation(compToWorld, controllerRotWS)
+		-- and compToWorld has ~0.04 deg/tick noise from VR tracking.
+		-- Rendered bone WS = compToWorld * CS_value, so noise doubles on screen.
+		--
+		-- FIX: smooth controllerRotWS (no compToWorld involved), then compute:
+		--   finalHandWorldRot = ComposeRotators(endBoneRotation, smoothedControllerRotWS)
+		-- This equals TransformRotation(compToWorld, ComposeRotators(endBoneRotation, InverseTransformRotation(compToWorld, smoothedControllerRotWS)))
+		-- with compToWorld canceling exactly: R_ctw * R_e * R_ctw^{-1} * R_ctrl_WS = R_ctrl_WS * R_e
+		-- Stamping in WorldSpace: rendered WS = finalHandWorldRot directly (no compToWorld on render path).
+		local rotSmoothing = smoothing --or 0.85
+		local smoothedControllerRotWS = controllerRotWS
+		if state ~= nil and state.lastControllerRotWS ~= nil then
+			local prev = state.lastControllerRotWS
+			if prev ~= nil then
+				local pP = prev.Pitch; local pY = prev.Yaw; local pR = prev.Roll
+				local cP = controllerRotWS.Pitch; local cY = controllerRotWS.Yaw; local cR = controllerRotWS.Roll
+				smoothedControllerRotWS = uevrUtils.rotator(
+					pP + normalizeDeg180(cP - pP) * (1.0 - rotSmoothing),
+					pY + normalizeDeg180(cY - pY) * (1.0 - rotSmoothing),
+					pR + normalizeDeg180(cR - pR) * (1.0 - rotSmoothing))
+			end
+		end
+		if state ~= nil then state.lastControllerRotWS = smoothedControllerRotWS end
+		-- WS-stable hand rotation: compToWorld cancels exactly in the derivation.
+		local finalHandWorldRot = kismet_math_library:ComposeRotators(endBoneRotation, smoothedControllerRotWS)
+		-- CS version still needed for twist bone computation downstream.
+		local smoothedControllerRotCS = kismet_math_library:InverseTransformRotation(compToWorld, smoothedControllerRotWS)
+		finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, smoothedControllerRotCS)
+		-- if solverParams.hand == Handed.Right and stopDebug == false then
+		-- 	print("smoothedControllerRotWS:", smoothedControllerRotWS.Pitch, smoothedControllerRotWS.Yaw, smoothedControllerRotWS.Roll)
+		-- 	print("finalHandWorldRot:", finalHandWorldRot.Pitch, finalHandWorldRot.Yaw, finalHandWorldRot.Roll)
+		-- end
+		-- Stamp in WorldSpace: rendered WS rotation = finalHandWorldRot (independent of compToWorld noise).
+		mesh:SetBoneRotationByName(EndBone, finalHandWorldRot, EBoneSpaces.WorldSpace)
+		if wristBone ~= "" then
+			mesh:SetBoneRotationByName(wristBone, finalHandWorldRot, EBoneSpaces.WorldSpace)
+		end
+		-- if solverParams.hand == Handed.Right and stopDebug == false then
+		-- 	local _ebRotWS = mesh:GetBoneRotationByName(EndBone, EBoneSpaces.WorldSpace)
+		-- 	local _ebPosWS = mesh:GetBoneLocationByName(EndBone, EBoneSpaces.WorldSpace)
+		-- 	if _ebRotWS ~= nil then print("EndBone rot WS post-set:", _ebRotWS.Pitch, _ebRotWS.Yaw, _ebRotWS.Roll) end
+		-- 	if _ebPosWS ~= nil then print("EndBone pos WS post-set:", _ebPosWS.X, _ebPosWS.Y, _ebPosWS.Z) end
+		-- end
+	else
+		finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, controllerRotCS)
+		mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+		if wristBone ~= "" then
+			mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+		end
+	end
     --print("controllerRotCS after correction:", controllerRotCS.Pitch, controllerRotCS.Yaw, controllerRotCS.Roll)
     -- ElbowCompRot was just stamped onto JointBone — reuse it directly, no read-back needed.
     local lowerArmRotCS = ElbowCompRot
@@ -1480,6 +1714,18 @@ function Rig:solveTwoBone(solverParams)
             mesh:SetBoneRotationByName(boneFName, finalCS, EBoneSpaces.ComponentSpace)
         end
     end
+
+	-- local EFFECTOR_SNAP_MAX_DIST = 5.0
+	-- local currentEndLocation = mesh:GetBoneLocationByName(EndBone, EBoneSpaces.WorldSpace)
+	-- state.lastEndLocationWS = nil
+	-- if currentEndLocation ~= nil then
+	-- 	local snapDist = kismet_math_library:VSize(
+	-- 		kismet_math_library:Subtract_VectorVector(currentEndLocation, effectorWS))
+	-- 	if snapDist ~= nil and snapDist < EFFECTOR_SNAP_MAX_DIST then
+	-- 		mesh:SetBoneLocationByName(EndBone, effectorWS, EBoneSpaces.WorldSpace)
+	-- 		state.lastEndLocationWS = currentEndLocation
+	-- 	end
+	-- end
 end
 Rig.solveTwoBone = uevrUtils.profiler:wrap("solveTwoBone", Rig.solveTwoBone)
 
@@ -1657,6 +1903,7 @@ function Rig:setActive(solverId, value)
 				forearmTwistMax = solverParams["forearm_twist_max"] or FOREARM_TWIST_MAX_DEG_DEFAULT,
                 twistBones = solverParams["twist_bones"] or {},
 				smoothing = solverParams["smoothing"] or 0.0,
+				rotSmoothing = solverParams["rot_smoothing"] or 0.85,
                 --invertForearmRoll = solverParams["invert_forearm_roll"] or false,
                 --animationLocationOffset = rigParams["animation_location_offset"] and uevrUtils.vector(rigParams["animation_location_offset"]) or uevrUtils.vector(0,0,0),
 				--animationRotationOffset = rigParams["animation_rotation_offset"] and uevrUtils.rotator(rigParams["animation_rotation_offset"]) or uevrUtils.rotator(0,0,0),
