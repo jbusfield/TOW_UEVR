@@ -1,4 +1,4 @@
-A VR first person mod for The Outer Worlds: Spacers Choice Edition using UEVR
+A VR first person mod for UEVR when UEVR is injected into The Outer Worlds: Spacers Choice Edition
 
 ### Features
 - Full first person 6DOF Motion controls
