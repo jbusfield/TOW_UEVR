@@ -1071,47 +1071,60 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	-- Thresholds tuned for near-head/scope poses where the pole projection gets weak.
 	local rawDesiredPole = ProjectVectorOnToPlane(poleCS, desiredDir)
 	local rawDesiredPoleLen = (rawDesiredPole ~= nil) and kismet_math_library:VSize(rawDesiredPole) or 0.0
+
+	local useAggressivePoleAlignment = false --setting this true doesnt seem to help anything and causes shoulder and elbow flips in AQP
 	local POLE_PROJ_MIN_LEN = 0.22
+
 	local desiredPole = nil
-	if rawDesiredPoleLen < POLE_PROJ_MIN_LEN then
-		if state ~= nil and state.lastDesiredPole ~= nil and kismet_math_library:VSize(state.lastDesiredPole) > 0.0001 then
-			desiredPole = state.lastDesiredPole
+	if useAggressivePoleAlignment == true then
+		if rawDesiredPoleLen < POLE_PROJ_MIN_LEN then
+			if state ~= nil and state.lastDesiredPole ~= nil and kismet_math_library:VSize(state.lastDesiredPole) > 0.0001 then
+				desiredPole = state.lastDesiredPole
+			else
+				return swingRot
+			end
 		else
-			return swingRot
+			desiredPole = kismet_math_library:Divide_VectorFloat(rawDesiredPole, rawDesiredPoleLen)
+			if state ~= nil and state.lastDesiredPole ~= nil then
+				if (kismet_math_library:Dot_VectorVector(desiredPole, state.lastDesiredPole) or 0.0) < 0.0 then
+					desiredPole = kismet_math_library:Multiply_VectorFloat(desiredPole, -1.0)
+				end
+			end
+			if state ~= nil then state.lastDesiredPole = desiredPole end
 		end
 	else
+		if rawDesiredPoleLen < 0.15 then return swingRot end
 		desiredPole = kismet_math_library:Divide_VectorFloat(rawDesiredPole, rawDesiredPoleLen)
-		if state ~= nil and state.lastDesiredPole ~= nil then
-			if (kismet_math_library:Dot_VectorVector(desiredPole, state.lastDesiredPole) or 0.0) < 0.0 then
-				desiredPole = kismet_math_library:Multiply_VectorFloat(desiredPole, -1.0)
-			end
-		end
-		if state ~= nil then state.lastDesiredPole = desiredPole end
+		if desiredPole == nil then return swingRot end
 	end
-	if desiredPole == nil then return swingRot end
 
 	local poleAxisVec = axisVectorFromRotator(swingRot, poleAxisChar)
 	if poleAxisVec == nil then return swingRot end
 	local rawCurrentPole = ProjectVectorOnToPlane(mulVec(poleAxisVec, poleAxisSign), desiredDir)
 	local rawCurrentPoleLen = (rawCurrentPole ~= nil) and kismet_math_library:VSize(rawCurrentPole) or 0.0
+
 	local currentPole = nil
-	if rawCurrentPoleLen < POLE_PROJ_MIN_LEN then
-		if state ~= nil and state.lastCurrentPole ~= nil and kismet_math_library:VSize(state.lastCurrentPole) > 0.0001 then
-			currentPole = state.lastCurrentPole
+	if useAggressivePoleAlignment == true then
+		if rawCurrentPoleLen < POLE_PROJ_MIN_LEN then
+			if state ~= nil and state.lastCurrentPole ~= nil and kismet_math_library:VSize(state.lastCurrentPole) > 0.0001 then
+				currentPole = state.lastCurrentPole
+			else
+				return swingRot
+			end
 		else
-			return swingRot
+			currentPole = kismet_math_library:Divide_VectorFloat(rawCurrentPole, rawCurrentPoleLen)
+			if state ~= nil and state.lastCurrentPole ~= nil then
+				if (kismet_math_library:Dot_VectorVector(currentPole, state.lastCurrentPole) or 0.0) < 0.0 then
+					currentPole = kismet_math_library:Multiply_VectorFloat(currentPole, -1.0)
+				end
+			end
+			if state ~= nil then state.lastCurrentPole = currentPole end
 		end
 	else
+		if rawCurrentPoleLen < 0.15 then return swingRot end
 		currentPole = kismet_math_library:Divide_VectorFloat(rawCurrentPole, rawCurrentPoleLen)
-		if state ~= nil and state.lastCurrentPole ~= nil then
-			if (kismet_math_library:Dot_VectorVector(currentPole, state.lastCurrentPole) or 0.0) < 0.0 then
-				currentPole = kismet_math_library:Multiply_VectorFloat(currentPole, -1.0)
-			end
-		end
-		if state ~= nil then state.lastCurrentPole = currentPole end
+		if currentPole == nil then return swingRot end
 	end
-	if currentPole == nil then return swingRot end
-
 	-- local desiredPole = SafeNormalize(ProjectVectorOnToPlane(poleCS, desiredDir))
 	-- if desiredPole == nil or kismet_math_library:VSize(desiredPole) < 0.0001 then return swingRot end
 	-- local poleAxisVec = axisVectorFromRotator(swingRot, poleAxisChar)
@@ -1125,25 +1138,25 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	-- 	print("IK align", _dbg_ik_align_label, "twistDeg:", (twistAngleDeg or "nil"), "poleAxis:", poleAxisChar, poleAxisSign)
 	-- 	print("IK align", _dbg_ik_align_label, "curPole:", currentPole.X, currentPole.Y, currentPole.Z, "desPole:", desiredPole.X, desiredPole.Y, desiredPole.Z)
 	-- end
-	if twistAngleDeg ~= nil then
-		-- Fade out twist correction in weak-projection poses (underconstrained, prone to visual pops).
-		local poleStability = math.min(rawDesiredPoleLen or 0.0, rawCurrentPoleLen or 0.0)
-		local twistWeight = kismet_math_library:FClamp((poleStability - 0.22) / (0.45 - 0.22), 0.0, 1.0)
-		twistAngleDeg = twistAngleDeg * twistWeight
-	end
+	-- if twistAngleDeg ~= nil then
+	-- 	-- Fade out twist correction in weak-projection poses (underconstrained, prone to visual pops).
+	-- 	local poleStability = math.min(rawDesiredPoleLen or 0.0, rawCurrentPoleLen or 0.0)
+	-- 	local twistWeight = kismet_math_library:FClamp((poleStability - 0.22) / (0.45 - 0.22), 0.0, 1.0)
+	-- 	twistAngleDeg = twistAngleDeg * twistWeight
+	-- end
 
-	if twistAngleDeg ~= nil and state ~= nil then
-		-- Keep pole-twist continuity to avoid occasional ±30-180° branch snaps.
-		local prevTwist = state.lastTwistDeg
-		twistAngleDeg = normalizeDeg180(twistAngleDeg)
-		if prevTwist ~= nil then
-			local delta = normalizeDeg180(twistAngleDeg - prevTwist)
-			local MAX_ALIGN_TWIST_STEP_DEG = 8.0
-			delta = kismet_math_library:FClamp(delta, -MAX_ALIGN_TWIST_STEP_DEG, MAX_ALIGN_TWIST_STEP_DEG)
-			twistAngleDeg = prevTwist + delta
-		end
-		state.lastTwistDeg = twistAngleDeg
-	end
+	-- if twistAngleDeg ~= nil and state ~= nil then
+	-- 	-- Keep pole-twist continuity to avoid occasional ±30-180° branch snaps.
+	-- 	local prevTwist = state.lastTwistDeg
+	-- 	twistAngleDeg = normalizeDeg180(twistAngleDeg)
+	-- 	if prevTwist ~= nil then
+	-- 		local delta = normalizeDeg180(twistAngleDeg - prevTwist)
+	-- 		local MAX_ALIGN_TWIST_STEP_DEG = 8.0
+	-- 		delta = kismet_math_library:FClamp(delta, -MAX_ALIGN_TWIST_STEP_DEG, MAX_ALIGN_TWIST_STEP_DEG)
+	-- 		twistAngleDeg = prevTwist + delta
+	-- 	end
+	-- 	state.lastTwistDeg = twistAngleDeg
+	-- end
 	if twistAngleDeg == nil or math.abs(twistAngleDeg) < IK_MIN_TWIST_DEG then return swingRot end
 
 	local deltaTwist = kismet_math_library:RotatorFromAxisAndAngle(desiredDir, twistAngleDeg)
@@ -1388,7 +1401,7 @@ function Rig:solveTwoBone(solverParams)
 	-- 9. Apply controller rotation to hand/wrist bone 
 	--------------------------------------------------------------
 	local finalHandRotCS = self:rotateHandAndWrist(mesh, EndBone, wristBone, endBoneRotation, controllerRotWS, controllerRotCS, compToWorld, state, smoothing)
- 
+
 	--------------------------------------------------------------
 	-- 10. Twist the forearm bones based on the hand/wrist rotation
 	--------------------------------------------------------------
@@ -1494,6 +1507,7 @@ function Rig:getMeshOutward(mesh, RootBone, JointBone, shoulderToHandVector, com
 
 		-- Optional pole smoothing (magic numbers).
 		-- Keeps elbow/forearm correctness by re-enforcing hemisphere + reach-perpendicularity after blend.
+		-- prevents huge jumps when hand approaches
 		local prevOutwardWS = state.smOutwardWS
 		if prevOutwardWS ~= nil and kismet_math_library:VSize(prevOutwardWS) > 0.0001 then
 			local POLE_SMOOTH_ALPHA_BASE = 0.72
