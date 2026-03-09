@@ -8,3 +8,4 @@ A VR first person mod for UEVR when UEVR is injected into The Outer Worlds: Spac
 - Option to attach the UI to head movement
 - Support for physical gunstocks
 - Roomscale fully supported
+- Optional IK arms
