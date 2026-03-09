@@ -1216,9 +1216,9 @@ configui.create(configDefinition)
 -- 	handsHidden = not handsHidden
 --     hands.hideHands(handsHidden)
 -- end)
--- -- register_key_bind("F4", function()
--- --     uevrUtils.profiler:report()
--- -- end)
+register_key_bind("F4", function()
+    uevrUtils.profiler:report()
+end)
 
 -- register_key_bind("F4", function()
 -- 	if ikInstance ~= nil then
@@ -1287,6 +1287,6 @@ uevr.params.sdk.callbacks.on_script_reset(function()
 	status["ikMeshComponent"] = nil
 end)
 
--- register_key_bind("F2", function()
--- 	stopDebug = true
--- end)
+register_key_bind("F2", function()
+	stopDebug = true
+end)

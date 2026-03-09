@@ -819,6 +819,7 @@ function Rig:create()
                         end
                     end
                 end
+
             end
         end
 	end
@@ -989,45 +990,27 @@ local function signedAngleDegAroundAxis(a, b, axis)
 end
 
 local function composeSwingWithCachedOrder(state, currentDir, currentRot, desiredDir, deltaSwing)
-	if state ~= nil and state.composeOrderSwing ~= nil then
-		return state.composeOrderSwing
-			and kismet_math_library:ComposeRotators(currentRot, deltaSwing)
-			or kismet_math_library:ComposeRotators(deltaSwing, currentRot)
-	end
-
 	local cand1 = kismet_math_library:ComposeRotators(deltaSwing, currentRot)
 	local cand2 = kismet_math_library:ComposeRotators(currentRot, deltaSwing)
-	if state ~= nil and state.composeOrderSwing == nil then
-		local localDir = SafeNormalize(kismet_math_library:LessLess_VectorRotator(currentDir, currentRot))
-		local function score(rot)
-			if rot == nil then return -1 end
-			local a = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(localDir, rot))
-			return kismet_math_library:Dot_VectorVector(a, desiredDir) or -1
-		end
-		state.composeOrderSwing = score(cand2) > score(cand1)
+	local localDir = SafeNormalize(kismet_math_library:LessLess_VectorRotator(currentDir, currentRot))
+	local function score(rot)
+		if rot == nil then return -1 end
+		local a = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(localDir, rot))
+		return kismet_math_library:Dot_VectorVector(a, desiredDir) or -1
 	end
-	return (state ~= nil and state.composeOrderSwing) and cand2 or cand1
+	return (score(cand2) > score(cand1)) and cand2 or cand1
 end
 
 local function composeTwistWithCachedOrder(state, swingRot, deltaTwist, desiredDir, desiredPole, poleAxisChar, poleAxisSign)
-	if state ~= nil and state.composeOrderTwist ~= nil then
-		return state.composeOrderTwist
-			and kismet_math_library:ComposeRotators(swingRot, deltaTwist)
-			or kismet_math_library:ComposeRotators(deltaTwist, swingRot)
-	end
-
 	local t1 = kismet_math_library:ComposeRotators(deltaTwist, swingRot)
 	local t2 = kismet_math_library:ComposeRotators(swingRot, deltaTwist)
-	if state ~= nil and state.composeOrderTwist == nil then
-		local function scorePole(rot)
-			local p = axisVectorFromRotator(rot, poleAxisChar)
-			if p == nil then return -1 end
-			p = SafeNormalize(ProjectVectorOnToPlane(mulVec(p, poleAxisSign), desiredDir))
-			return kismet_math_library:Dot_VectorVector(p, desiredPole) or -1
-		end
-		state.composeOrderTwist = scorePole(t2) > scorePole(t1)
+	local function scorePole(rot)
+		local p = axisVectorFromRotator(rot, poleAxisChar)
+		if p == nil then return -1 end
+		p = SafeNormalize(ProjectVectorOnToPlane(mulVec(p, poleAxisSign), desiredDir))
+		return kismet_math_library:Dot_VectorVector(p, desiredPole) or -1
 	end
-	return (state ~= nil and state.composeOrderTwist) and t2 or t1
+	return (scorePole(t2) > scorePole(t1)) and t2 or t1
 end
 
 --local _dbg_ik_align_label = nil   -- set by solveTwoBone; read by alignBoneAxisToDirCS
@@ -1085,19 +1068,48 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	-- Check raw projection length BEFORE normalizing.
 	-- When poleCS is nearly parallel/antiparallel to desiredDir (bone pointing toward face),
 	-- the raw projection is near-zero; normalizing it amplifies noise and causes ±180° sign-flip oscillation.
-	-- Threshold 0.15 ≈ skipping when |dot(poleCS, desiredDir)| > 0.989 (within ~8.5° of parallel).
+	-- Thresholds tuned for near-head/scope poses where the pole projection gets weak.
 	local rawDesiredPole = ProjectVectorOnToPlane(poleCS, desiredDir)
 	local rawDesiredPoleLen = (rawDesiredPole ~= nil) and kismet_math_library:VSize(rawDesiredPole) or 0.0
-	if rawDesiredPoleLen < 0.15 then return swingRot end
-	local desiredPole = kismet_math_library:Divide_VectorFloat(rawDesiredPole, rawDesiredPoleLen)
+	local POLE_PROJ_MIN_LEN = 0.22
+	local desiredPole = nil
+	if rawDesiredPoleLen < POLE_PROJ_MIN_LEN then
+		if state ~= nil and state.lastDesiredPole ~= nil and kismet_math_library:VSize(state.lastDesiredPole) > 0.0001 then
+			desiredPole = state.lastDesiredPole
+		else
+			return swingRot
+		end
+	else
+		desiredPole = kismet_math_library:Divide_VectorFloat(rawDesiredPole, rawDesiredPoleLen)
+		if state ~= nil and state.lastDesiredPole ~= nil then
+			if (kismet_math_library:Dot_VectorVector(desiredPole, state.lastDesiredPole) or 0.0) < 0.0 then
+				desiredPole = kismet_math_library:Multiply_VectorFloat(desiredPole, -1.0)
+			end
+		end
+		if state ~= nil then state.lastDesiredPole = desiredPole end
+	end
 	if desiredPole == nil then return swingRot end
 
 	local poleAxisVec = axisVectorFromRotator(swingRot, poleAxisChar)
 	if poleAxisVec == nil then return swingRot end
 	local rawCurrentPole = ProjectVectorOnToPlane(mulVec(poleAxisVec, poleAxisSign), desiredDir)
 	local rawCurrentPoleLen = (rawCurrentPole ~= nil) and kismet_math_library:VSize(rawCurrentPole) or 0.0
-	if rawCurrentPoleLen < 0.15 then return swingRot end
-	local currentPole = kismet_math_library:Divide_VectorFloat(rawCurrentPole, rawCurrentPoleLen)
+	local currentPole = nil
+	if rawCurrentPoleLen < POLE_PROJ_MIN_LEN then
+		if state ~= nil and state.lastCurrentPole ~= nil and kismet_math_library:VSize(state.lastCurrentPole) > 0.0001 then
+			currentPole = state.lastCurrentPole
+		else
+			return swingRot
+		end
+	else
+		currentPole = kismet_math_library:Divide_VectorFloat(rawCurrentPole, rawCurrentPoleLen)
+		if state ~= nil and state.lastCurrentPole ~= nil then
+			if (kismet_math_library:Dot_VectorVector(currentPole, state.lastCurrentPole) or 0.0) < 0.0 then
+				currentPole = kismet_math_library:Multiply_VectorFloat(currentPole, -1.0)
+			end
+		end
+		if state ~= nil then state.lastCurrentPole = currentPole end
+	end
 	if currentPole == nil then return swingRot end
 
 	-- local desiredPole = SafeNormalize(ProjectVectorOnToPlane(poleCS, desiredDir))
@@ -1113,6 +1125,25 @@ local function alignBoneAxisToDirCS(mesh, boneName, childBoneName, desiredDirCS,
 	-- 	print("IK align", _dbg_ik_align_label, "twistDeg:", (twistAngleDeg or "nil"), "poleAxis:", poleAxisChar, poleAxisSign)
 	-- 	print("IK align", _dbg_ik_align_label, "curPole:", currentPole.X, currentPole.Y, currentPole.Z, "desPole:", desiredPole.X, desiredPole.Y, desiredPole.Z)
 	-- end
+	if twistAngleDeg ~= nil then
+		-- Fade out twist correction in weak-projection poses (underconstrained, prone to visual pops).
+		local poleStability = math.min(rawDesiredPoleLen or 0.0, rawCurrentPoleLen or 0.0)
+		local twistWeight = kismet_math_library:FClamp((poleStability - 0.22) / (0.45 - 0.22), 0.0, 1.0)
+		twistAngleDeg = twistAngleDeg * twistWeight
+	end
+
+	if twistAngleDeg ~= nil and state ~= nil then
+		-- Keep pole-twist continuity to avoid occasional ±30-180° branch snaps.
+		local prevTwist = state.lastTwistDeg
+		twistAngleDeg = normalizeDeg180(twistAngleDeg)
+		if prevTwist ~= nil then
+			local delta = normalizeDeg180(twistAngleDeg - prevTwist)
+			local MAX_ALIGN_TWIST_STEP_DEG = 8.0
+			delta = kismet_math_library:FClamp(delta, -MAX_ALIGN_TWIST_STEP_DEG, MAX_ALIGN_TWIST_STEP_DEG)
+			twistAngleDeg = prevTwist + delta
+		end
+		state.lastTwistDeg = twistAngleDeg
+	end
 	if twistAngleDeg == nil or math.abs(twistAngleDeg) < IK_MIN_TWIST_DEG then return swingRot end
 
 	local deltaTwist = kismet_math_library:RotatorFromAxisAndAngle(desiredDir, twistAngleDeg)
@@ -1169,22 +1200,10 @@ end
 --stopDebug = false
 local count = 0
 function Rig:solveTwoBone(solverParams)
-    -- mesh,               -- UPoseableMeshComponent
-    -- RootBone,           -- e.g. "UpperArm_L"
-    -- JointBone,          -- e.g. "LowerArm_L"
-    -- EndBone,            -- e.g. "Hand_L"
-    -- wristBone,            -- e.g. "Hand_L"
-	-- ControllerWS,       -- VR controller world location (FVector)
-	-- ControllerRotWS,    -- VR controller world rotation (FRotator) (optional)
-	-- HandOffset,         -- FVector offset from controller → hand bone (in controller local space)
-    -- AllowStretch,       -- bool
-    -- StartStretchRatio,  -- float
-    -- MaxStretchScale,     -- float
-	-- twistBones
-    local mesh = solverParams.mesh
-    local RootBone = solverParams.startBone
-    local JointBone = solverParams.jointBone
-    local EndBone = solverParams.endBone
+    local mesh = solverParams.mesh				-- UPoseableMeshComponent
+    local RootBone = solverParams.startBone		-- e.g. "UpperArm_L"
+    local JointBone = solverParams.jointBone	-- e.g. "LowerArm_L"
+    local EndBone = solverParams.endBone		-- e.g. "Hand_L"
     local wristBone = solverParams.wristBone
     local controllerPosWS, controllerRotWS = getTargetLocationAndRotation(solverParams.hand, solverParams.controller)
     -- local controllerPosWS = solverParams.controller and solverParams.controller:K2_GetComponentLocation() or nil
@@ -1200,20 +1219,18 @@ function Rig:solveTwoBone(solverParams)
     local wristTwistMax = solverParams.wristTwistMax
 	local forearmTwistMax = solverParams.forearmTwistMax
 	local smoothing = solverParams.smoothing or 0.0
---   local invertForearmRoll = solverParams.invertForearmRoll
+
 	local state = solverParams.state
 	if state == nil then
 		state = newIKState()
 		solverParams.state = state
 	end
-    VEC_UNIT_Y = VEC_UNIT_Y_FORWARD--invertForearmRoll == true and VEC_UNIT_Y_INVERSE or VEC_UNIT_Y_FORWARD
+    VEC_UNIT_Y = VEC_UNIT_Y_FORWARD
 
 	if controllerPosWS == nil or controllerRotWS == nil then
         print("solveTwoBone: Missing controller position/rotation")
 		return
 	end
-	-- if solverParams.hand == Handed.Right and stopDebug == false then print("Controller rot:",controllerRotWS.Pitch, controllerRotWS.Yaw, controllerRotWS.Roll) end
-	-- if solverParams.hand == Handed.Right and stopDebug == false then print("Controller pos:",controllerPosWS.X, controllerPosWS.Y, controllerPosWS.Z) end
 
     --------------------------------------------------------------
     -- 1. Component transform + shoulder position (fail-fast)
@@ -1228,23 +1245,8 @@ function Rig:solveTwoBone(solverParams)
 	local compToWorld = mesh:K2_GetComponentToWorld()
 	if compToWorld == nil then return end
 
-	local ShoulderWS = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.WorldSpace)
-	if ShoulderWS == nil then return end
-
-	local ShoulderCS = mesh:GetBoneRotationByName(RootBone, EBoneSpaces.ComponentSpace)
-	if solverParams.hand == Handed.Left and count < 5 then
-		print("ShoulderCS:", count, ShoulderCS.Pitch, ShoulderCS.Yaw, ShoulderCS.Roll)
-		count = count + 1
-	end
-
-	-- if solverParams.hand == Handed.Right and stopDebug == false then
-	-- 	print("ShoulderWS:", ShoulderWS.X, ShoulderWS.Y, ShoulderWS.Z)
-	-- end
-
-	-- if state.lastEndLocationWS ~= nil then
-	-- 	mesh:SetBoneLocationByName(EndBone, state.lastEndLocationWS, EBoneSpaces.WorldSpace)
-	-- 	state.lastEndLocationWS = nil
-	-- end
+	local shoulderWS = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.WorldSpace)
+	if shoulderWS == nil then return end
 
     --------------------------------------------------------------
     -- 2. Compute Effector (hand target)
@@ -1252,9 +1254,9 @@ function Rig:solveTwoBone(solverParams)
     -- effectorWS = where the HAND BONE should go
     -- controllerPosWS is where the real hand is
     -- handOffset rotates/translates controller → hand bone pose
-    --------------------------------------------------------------
 	-- If you want no offsets: pass handOffset=nil and effectorWS will be the controller location.
 	-- handOffset is controller-local, so we must rotate it by the controller's world rotation.
+    --------------------------------------------------------------
 	local effectorWS = controllerPosWS
 	if handOffset ~= nil then
 		local offsetWS = handOffset
@@ -1271,7 +1273,7 @@ function Rig:solveTwoBone(solverParams)
 	-- Smooth controller target in component-space offset from shoulder.
 	-- This damps root-motion/head-turn jitter without smoothing final solved outputs.
 	if state ~= nil and smoothing > 0 then
-		local effectorOffsetWS = kismet_math_library:Subtract_VectorVector(effectorWS, ShoulderWS)
+		local effectorOffsetWS = kismet_math_library:Subtract_VectorVector(effectorWS, shoulderWS)
 		local effectorOffsetCS = kismet_math_library:InverseTransformDirection(compToWorld, effectorOffsetWS)
 		local smOffsetCS = effectorOffsetCS
 		if state.lastEffectorOffsetCS ~= nil then
@@ -1282,145 +1284,57 @@ function Rig:solveTwoBone(solverParams)
 		end
 		state.lastEffectorOffsetCS = smOffsetCS
 		local smOffsetWS = kismet_math_library:TransformDirection(compToWorld, smOffsetCS)
-		effectorWS = kismet_math_library:Add_VectorVector(ShoulderWS, smOffsetWS)
+		effectorWS = kismet_math_library:Add_VectorVector(shoulderWS, smOffsetWS)
 	end
-
-	--even though this only smooths the shoulder which should be all thats needed, it in inferior to the above code
-	-- local solveShoulderWS = ShoulderWS
-    -- if state ~= nil and smoothing > 0 then
-    --     local smShoulder = ShoulderWS
-    --     if state.lastSolveShoulderWS ~= nil then
-    --         smShoulder = kismet_math_library:Add_VectorVector(
-    --             kismet_math_library:Multiply_VectorFloat(state.lastSolveShoulderWS, smoothing),
-    --             kismet_math_library:Multiply_VectorFloat(ShoulderWS, 1 - smoothing)
-    --         )
-    --     end
-    --     state.lastSolveShoulderWS = smShoulder
-    --     solveShoulderWS = smShoulder
-    -- end
-	-- ShoulderWS = solveShoulderWS
 
     --------------------------------------------------------------
     -- 3. Auto-generate JointTarget (elbow direction)
     --------------------------------------------------------------
     -- Forward direction from shoulder → hand target
-	local shoulderToHandVector = SafeNormalize(kismet_math_library:Subtract_VectorVector(effectorWS, ShoulderWS))
+	local shoulderToHandVector = SafeNormalize(kismet_math_library:Subtract_VectorVector(effectorWS, shoulderWS))
 
-	-- Elbow pole vector:
-	-- Use the baseline elbow direction projected onto the reach plane.
-	-- This keeps the elbow bending in a consistent, "natural" direction instead of flipping.
-	if state ~= nil and state.baselineElbowDirCS == nil then
-		local sCS0 = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.ComponentSpace)
-		local jCS0 = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.ComponentSpace)
-		if sCS0 ~= nil and jCS0 ~= nil then
-			state.baselineElbowDirCS = SafeNormalize(kismet_math_library:Subtract_VectorVector(jCS0, sCS0))
-		end
-	end
-	-- GetRightVector changes with pawn rotation — fetch fresh every tick.
-	local OutwardWS = mesh:GetRightVector()
-	if state ~= nil and state.baselineElbowDirCS ~= nil then
-		local reachCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, shoulderToHandVector))
-		-- Same singularity guard as in alignBoneAxisToDirCS:
-		-- When the reach direction is nearly parallel to the baseline elbow direction,
-		-- the raw projection is near-zero; SafeNormalize would amplify noise and flip the pole sign.
-		-- Hold the last valid pole instead of producing a garbage vector.
-		local rawPoleCS = ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS)
-		local rawPoleLen = (rawPoleCS ~= nil) and kismet_math_library:VSize(rawPoleCS) or 0.0
-		local poleCS
-		if rawPoleLen >= 0.15 then
-			poleCS = kismet_math_library:Divide_VectorFloat(rawPoleCS, rawPoleLen)
-			state.lastValidPoleCS = poleCS
-		else
-			-- Left arm natural elbow direction is -Y (outward to the left); right arm is +Y.
-			local handFallbackPole = (solverParams.hand == Handed.Left) and (VEC_UNIT_Y_INVERSE or uevrUtils.vector(0, -1, 0)) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
-			poleCS = state.lastValidPoleCS or handFallbackPole
-		end
+	-- if count > 1000 then
+	-- 	count = 0
+	-- 	state.lastOutwardWS = nil
+	-- else
+	-- 	count = count + 1
+	-- end
+	-- -- GetRightVector changes with pawn rotation — fetch fresh every tick.
+	-- if state.lastOutwardWS == nil then
+	-- 	print("Recomputing outwardWS")
+	-- 	state.lastOutwardWS = self:getMeshOutward(mesh, RootBone, JointBone, shoulderToHandVector, compToWorld, controllerRotCS, allowWristAffectsElbow, wristTwistInfluence, wristTwistMax, solverParams, state)
+	-- end
+	-- local outwardWS = state.lastOutwardWS
 
-		-- local poleCS = SafeNormalize(ProjectVectorOnToPlane(state.baselineElbowDirCS, reachCS))
-		-- if kismet_math_library:VSize(poleCS) < 0.0001 then
-		-- 	poleCS = VEC_UNIT_Y
-		-- end
+	local outwardWS = self:getMeshOutward(mesh, RootBone, JointBone, shoulderToHandVector, compToWorld, controllerRotCS, allowWristAffectsElbow, wristTwistInfluence, wristTwistMax, solverParams, state)
 
-		-- Optional: allow wrist rotation to affect elbow rotation. Rotate pole around reach axis based on controller's orientation in the reach plane.
-		if controllerRotCS ~= nil and allowWristAffectsElbow and wristTwistInfluence > 0 then
-            local ctrlUpCS = SafeNormalize(kismet_math_library:GetUpVector(controllerRotCS))
-            local upProj = (ctrlUpCS ~= nil) and SafeNormalize(ProjectVectorOnToPlane(ctrlUpCS, reachCS)) or nil
-            local upProjLen = (upProj ~= nil) and (kismet_math_library:VSize(upProj) or 0.0) or 0.0
-            -- If the controller up axis is close to the reach axis, projection becomes unstable.
-            -- In that case, hold the last valid projection instead of flipping sign/axis.
-            if upProjLen > 0.25 then
-                state.lastCtrlPoleCS = upProj
-            end
-            local ctrlPoleCS = state.lastCtrlPoleCS
-            if ctrlPoleCS ~= nil and kismet_math_library:VSize(ctrlPoleCS) > 0.0001 then
-                local rawTwistDeg = signedAngleDegAroundAxis(poleCS, ctrlPoleCS, reachCS)
-                if rawTwistDeg ~= nil then
-                    rawTwistDeg = (((360 + rawTwistDeg) % 360) - 180) -- prevent discontinuity at -180/180
-                    rawTwistDeg = kismet_math_library:FClamp(rawTwistDeg, -wristTwistMax, wristTwistMax)
-                    local appliedDeg = rawTwistDeg * wristTwistInfluence
-                    if math.abs(appliedDeg) > 0.01 then
-                        local deltaPoleRot = kismet_math_library:RotatorFromAxisAndAngle(reachCS, appliedDeg)
-                        poleCS = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(poleCS, deltaPoleRot))
-                    end
-                end
-            end
-		end
-
-		OutwardWS = SafeNormalize(kismet_math_library:TransformDirection(compToWorld, poleCS))
-	end
-
+	--------------------------------------------------------------
+	-- 4. Fetch bone locations and Joint target
+	--------------------------------------------------------------
 	-- Bone lengths are skeleton constants — measure once, then reuse.
-	local JointWS = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.WorldSpace)
-	local EndWS   = mesh:GetBoneLocationByName(EndBone,   EBoneSpaces.WorldSpace)
-	if state and state.upperLen == nil and JointWS ~= nil then
-		state.upperLen = kismet_math_library:VSize(kismet_math_library:Subtract_VectorVector(JointWS, ShoulderWS))
-	end
-	if state and state.lowerLen == nil and JointWS ~= nil and EndWS ~= nil then
-		state.lowerLen = kismet_math_library:VSize(kismet_math_library:Subtract_VectorVector(EndWS, JointWS))
-	end
-	local upperLen = (state and state.upperLen) or 30.0
-	local lowerLen = (state and state.lowerLen) or 30.0
-	local forwardDist = (upperLen + lowerLen) * 0.5
-	local outwardDist = upperLen * 0.35
-
-	-- Final elbow direction point
-	local JointTargetWS = kismet_math_library:Add_VectorVector(
-		ShoulderWS,
-		kismet_math_library:Add_VectorVector(
-			kismet_math_library:Multiply_VectorFloat(shoulderToHandVector, forwardDist),
-			kismet_math_library:Multiply_VectorFloat(OutwardWS, outwardDist)
-		)
-	)
-
+	local jointWS = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.WorldSpace)
+	local endWS   = mesh:GetBoneLocationByName(EndBone,   EBoneSpaces.WorldSpace)
+	local jointTargetWS = self:getJointTarget(shoulderWS, jointWS, endWS, shoulderToHandVector, outwardWS, state)
 
     --------------------------------------------------------------
     -- 5. Run IK solver
     --------------------------------------------------------------
-    local OutJointWS = uevrUtils.vector()
-    local OutEndWS   = uevrUtils.vector()
+    local outJointWS = uevrUtils.vector()
+    local outEndWS   = uevrUtils.vector()
 
 	---@diagnostic disable-next-line: need-check-nil, undefined-field
     UKismetAnimationLibrary:K2_TwoBoneIK(
-        ShoulderWS, JointWS, EndWS,
-        JointTargetWS, effectorWS,
-        OutJointWS, OutEndWS,
+        shoulderWS, jointWS, endWS,
+        jointTargetWS, effectorWS,
+        outJointWS, outEndWS,
         allowStretch, startStretchRatio, maxStretchScale
     )
-
-	local smOutJoint = OutJointWS
-	local smOutEnd = OutEndWS
-	-- if smOutJoint ~= nil and smOutEnd ~= nil then
-	-- 	if solverParams.hand == Handed.Right and stopDebug == false then
-	-- 		print("IK joint WS:", smOutJoint.X, smOutJoint.Y, smOutJoint.Z)
-	-- 		print("IK end   WS:", smOutEnd.X, smOutEnd.Y, smOutEnd.Z)
-	-- 	end
-	-- end
 
     --------------------------------------------------------------
     -- 6. Reconstruct rotations from solved positions
     --------------------------------------------------------------
-	local upperDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutJoint, ShoulderWS))
-	local lowerDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(smOutEnd, smOutJoint))
+	local upperDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(outJointWS, shoulderWS))
+	local lowerDirWS = SafeNormalize(kismet_math_library:Subtract_VectorVector(outEndWS, outJointWS))
 
 	--------------------------------------------------------------
 	-- 7. Build target rotations in ComponentSpace
@@ -1429,7 +1343,7 @@ function Rig:solveTwoBone(solverParams)
 	-- We calibrate which axis (X/Y/Z with sign) to align, then construct a component-space rot.
 	local upperDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, upperDirWS))
 	local lowerDirCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, lowerDirWS))
-	local poleCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, OutwardWS))
+	local poleCS = SafeNormalize(kismet_math_library:InverseTransformDirection(compToWorld, outwardWS))
 
 	if smoothing > 0 then
 		-- Normalized lerp (NLERP) to suppress per-tick noise in IK directions and pole.
@@ -1458,13 +1372,164 @@ function Rig:solveTwoBone(solverParams)
 		state.smPoleCS = poleCS
 	end
 
-	-- if solverParams.hand == Handed.Right and stopDebug == false then
-	-- 	print("IK dirCS upper:", upperDirCS.X, upperDirCS.Y, upperDirCS.Z)
-	-- 	print("IK dirCS lower:", lowerDirCS.X, lowerDirCS.Y, lowerDirCS.Z)
-	-- 	print("IK poleCS:", poleCS.X, poleCS.Y, poleCS.Z)
-	-- end
-
 	-- Cache shoulder pole axis selection once.
+	local axisShoulder = self:getShoulderPoleAxis(mesh, RootBone, JointBone, EndBone, solverParams, state)
+
+	-- Cache joint pole axis selection.
+	local axisJoint = self:getJointPoleAxis(mesh, RootBone, JointBone, EndBone, solverParams, state)
+
+	--------------------------------------------------------------
+	-- 8. Apply component-space rotations to shoulder and elbow bones
+	--------------------------------------------------------------
+	self:rotateShoulder(mesh, RootBone, JointBone, upperDirCS, axisShoulder, poleCS, state, smoothing)
+	local elbowRotCS = self:rotateElbow(mesh, JointBone, EndBone, lowerDirCS, axisJoint, poleCS, state, smoothing)
+
+	--------------------------------------------------------------
+	-- 9. Apply controller rotation to hand/wrist bone 
+	--------------------------------------------------------------
+	local finalHandRotCS = self:rotateHandAndWrist(mesh, EndBone, wristBone, endBoneRotation, controllerRotWS, controllerRotCS, compToWorld, state, smoothing)
+ 
+	--------------------------------------------------------------
+	-- 10. Twist the forearm bones based on the hand/wrist rotation
+	--------------------------------------------------------------
+	self:twistForearm(mesh, lowerDirCS, elbowRotCS, finalHandRotCS, twistBones, forearmTwistMax, wristTwistMax, state)
+
+end
+Rig.solveTwoBone = uevrUtils.profiler:wrap("solveTwoBone", Rig.solveTwoBone)
+
+function Rig:getJointTarget(shoulderWS, jointWS, endWS, shoulderToHandVector, outwardWS, state)
+	if state and state.upperLen == nil and jointWS ~= nil then
+		state.upperLen = kismet_math_library:VSize(kismet_math_library:Subtract_VectorVector(jointWS, shoulderWS))
+	end
+	if state and state.lowerLen == nil and jointWS ~= nil and endWS ~= nil then
+		state.lowerLen = kismet_math_library:VSize(kismet_math_library:Subtract_VectorVector(endWS, jointWS))
+	end
+	local upperLen = (state and state.upperLen) or 30.0
+	local lowerLen = (state and state.lowerLen) or 30.0
+	local forwardDist = (upperLen + lowerLen) * 0.5
+	local outwardDist = upperLen * 0.35
+
+	-- Final elbow direction point
+	return kismet_math_library:Add_VectorVector(
+		shoulderWS,
+		kismet_math_library:Add_VectorVector(
+			kismet_math_library:Multiply_VectorFloat(shoulderToHandVector, forwardDist),
+			kismet_math_library:Multiply_VectorFloat(outwardWS, outwardDist)
+		)
+	)
+end
+Rig.getJointTarget = uevrUtils.profiler:wrap("getJointTarget", Rig.getJointTarget)
+
+function Rig:getMeshOutward(mesh, RootBone, JointBone, shoulderToHandVector, compToWorld, controllerRotCS, allowWristAffectsElbow, wristTwistInfluence, wristTwistMax, solverParams, state)
+	if state == nil then return mesh:GetRightVector() end
+
+	local meshRight = mesh:GetRightVector()
+	local meshFwd   = mesh:GetForwardVector()
+	local meshUp    = mesh:GetUpVector()
+
+	if state.anchorPoleInBodySpace == nil then
+		local sWS0 = mesh:GetBoneLocationByName(RootBone, EBoneSpaces.WorldSpace)
+		local jWS0 = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.WorldSpace)
+		if sWS0 ~= nil and jWS0 ~= nil then
+			local rawDir = SafeNormalize(kismet_math_library:Subtract_VectorVector(jWS0, sWS0))
+			state.anchorPoleInBodySpace = {
+				right = kismet_math_library:Dot_VectorVector(rawDir, meshRight),
+				fwd   = kismet_math_library:Dot_VectorVector(rawDir, meshFwd),
+				up    = kismet_math_library:Dot_VectorVector(rawDir, meshUp),
+			}
+		end
+	end
+
+	local handFallbackPole = (solverParams.hand == Handed.Left)
+		and kismet_math_library:Multiply_VectorFloat(meshRight, -1.0)
+		or meshRight
+
+	local outwardWS = state.lastValidPoleWS or handFallbackPole
+	if state.anchorPoleInBodySpace ~= nil then
+		local a = state.anchorPoleInBodySpace
+		local anchorPoleWS = SafeNormalize(
+			kismet_math_library:Add_VectorVector(
+				kismet_math_library:Add_VectorVector(
+					kismet_math_library:Multiply_VectorFloat(meshRight, a.right),
+					kismet_math_library:Multiply_VectorFloat(meshFwd, a.fwd)
+				),
+				kismet_math_library:Multiply_VectorFloat(meshUp, a.up)
+			)
+		)
+
+		local reachWS = SafeNormalize(shoulderToHandVector)
+		local perp = kismet_math_library:Cross_VectorVector(reachWS, kismet_math_library:Cross_VectorVector(anchorPoleWS, reachWS))
+		local perpLen = (perp ~= nil) and (kismet_math_library:VSize(perp) or 0.0) or 0.0
+		if perpLen >= 0.0001 then
+			local candidate = kismet_math_library:Divide_VectorFloat(perp, perpLen)
+			if (kismet_math_library:Dot_VectorVector(candidate, anchorPoleWS) or 0.0) < 0.0 then
+				candidate = kismet_math_library:Multiply_VectorFloat(candidate, -1.0)
+			end
+			outwardWS = candidate
+			state.lastValidPoleWS = candidate
+		end
+
+		if controllerRotCS ~= nil and allowWristAffectsElbow and wristTwistInfluence > 0 then
+			local ctrlUpCS = SafeNormalize(kismet_math_library:GetUpVector(controllerRotCS))
+			local ctrlUpWS = SafeNormalize(kismet_math_library:TransformDirection(compToWorld, ctrlUpCS))
+			local upProjWS = (ctrlUpWS ~= nil) and SafeNormalize(ProjectVectorOnToPlane(ctrlUpWS, reachWS)) or nil
+			local upProjLen = (upProjWS ~= nil) and (kismet_math_library:VSize(upProjWS) or 0.0) or 0.0
+			if upProjLen > 0.25 then
+				state.lastCtrlPoleWS = upProjWS
+			end
+			local ctrlPoleWS = state.lastCtrlPoleWS
+			if ctrlPoleWS ~= nil and kismet_math_library:VSize(ctrlPoleWS) > 0.0001 then
+				local rawTwistDeg = signedAngleDegAroundAxis(outwardWS, ctrlPoleWS, reachWS)
+				if rawTwistDeg ~= nil then
+					rawTwistDeg = (((360 + rawTwistDeg) % 360) - 180)
+					rawTwistDeg = kismet_math_library:FClamp(rawTwistDeg, -wristTwistMax, wristTwistMax)
+					local appliedDeg = rawTwistDeg * wristTwistInfluence
+					if math.abs(appliedDeg) > 0.01 then
+						local deltaPoleRot = kismet_math_library:RotatorFromAxisAndAngle(reachWS, appliedDeg)
+						outwardWS = SafeNormalize(kismet_math_library:GreaterGreater_VectorRotator(outwardWS, deltaPoleRot))
+					end
+				end
+			end
+		end
+
+		-- Optional pole smoothing (magic numbers).
+		-- Keeps elbow/forearm correctness by re-enforcing hemisphere + reach-perpendicularity after blend.
+		local prevOutwardWS = state.smOutwardWS
+		if prevOutwardWS ~= nil and kismet_math_library:VSize(prevOutwardWS) > 0.0001 then
+			local POLE_SMOOTH_ALPHA_BASE = 0.72
+			local POLE_SMOOTH_ALPHA_NEAR = 0.90
+			local POLE_SMOOTH_NEAR_LEN = 0.30
+			local alpha = (perpLen < POLE_SMOOTH_NEAR_LEN) and POLE_SMOOTH_ALPHA_NEAR or POLE_SMOOTH_ALPHA_BASE
+
+			local mixed = kismet_math_library:Add_VectorVector(
+				kismet_math_library:Multiply_VectorFloat(prevOutwardWS, alpha),
+				kismet_math_library:Multiply_VectorFloat(outwardWS, 1.0 - alpha)
+			)
+			local mixedLen = kismet_math_library:VSize(mixed) or 0.0
+			if mixedLen > 0.0001 then
+				outwardWS = kismet_math_library:Divide_VectorFloat(mixed, mixedLen)
+				if (kismet_math_library:Dot_VectorVector(outwardWS, anchorPoleWS) or 0.0) < 0.0 then
+					outwardWS = kismet_math_library:Multiply_VectorFloat(outwardWS, -1.0)
+				end
+				local perpSm = kismet_math_library:Cross_VectorVector(reachWS, kismet_math_library:Cross_VectorVector(outwardWS, reachWS))
+				local perpSmLen = (perpSm ~= nil) and (kismet_math_library:VSize(perpSm) or 0.0) or 0.0
+				if perpSmLen > 0.0001 then
+					outwardWS = kismet_math_library:Divide_VectorFloat(perpSm, perpSmLen)
+					if (kismet_math_library:Dot_VectorVector(outwardWS, anchorPoleWS) or 0.0) < 0.0 then
+						outwardWS = kismet_math_library:Multiply_VectorFloat(outwardWS, -1.0)
+					end
+				end
+			end
+		end
+		state.smOutwardWS = outwardWS
+		state.lastValidPoleWS = outwardWS
+	end
+
+	return outwardWS
+end
+Rig.getMeshOutward = uevrUtils.profiler:wrap("getMeshOutward", Rig.getMeshOutward)
+
+function Rig:getShoulderPoleAxis(mesh, RootBone, JointBone, EndBone, solverParams, state)
 	if state.shoulderPoleAxisForBones ~= (RootBone .. "->" .. JointBone) or state.shoulderPoleAxisChoice == nil then
 		local rootDir = getBoneDirCS(mesh, RootBone, JointBone)
 		local sx, sy, sz = axisVectorsFromRot(mesh:GetBoneRotationByName(RootBone, EBoneSpaces.ComponentSpace))
@@ -1474,10 +1539,11 @@ function Rig:solveTwoBone(solverParams)
 		state.shoulderPoleAxisChoice = chooseBestPoleAxis(sx, sy, sz, shoulderLong.axis, poleAxisRefCS)
 		state.shoulderPoleAxisForBones = RootBone .. "->" .. JointBone
 	end
-	local axisShoulder = { pole = state.shoulderPoleAxisChoice }
+	return { pole = state.shoulderPoleAxisChoice }
+end
+Rig.getShoulderPoleAxis = uevrUtils.profiler:wrap("getShoulderPoleAxis", Rig.getShoulderPoleAxis)
 
-	-- Cache the elbow pole axis selection once.
-	-- Re-detecting every tick can flip between axes as the joint rotates, which looks like a 180° palm twist.
+function Rig:getJointPoleAxis(mesh, RootBone, JointBone, EndBone, solverParams, state)
 	if state.bonesKey == nil then state.bonesKey = JointBone .. "->" .. EndBone end
 	local bonesKey = state.bonesKey
 	if state.jointPoleAxisChoice == nil or state.jointPoleAxisForBones ~= bonesKey then
@@ -1485,19 +1551,22 @@ function Rig:solveTwoBone(solverParams)
 		local jx, jy, jz = axisVectorsFromRot(mesh:GetBoneRotationByName(JointBone, EBoneSpaces.ComponentSpace))
 		local jointLong = chooseBestAxis(jx, jy, jz, jointDir)
 		local handFallbackPoleRef = (solverParams.hand == Handed.Left) and (VEC_UNIT_Y_INVERSE or uevrUtils.vector(0, -1, 0)) or (VEC_UNIT_Y or uevrUtils.vector(0, 1, 0))
-	    local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or handFallbackPoleRef
+		local poleAxisRefCS = getBendPoleRefCS(mesh, RootBone, JointBone, EndBone) or handFallbackPoleRef
 		state.jointPoleAxisChoice = chooseBestPoleAxis(jx, jy, jz, jointLong.axis, poleAxisRefCS)
 		state.jointPoleAxisForBones = bonesKey
 	end
-	local axisJoint = { pole = state.jointPoleAxisChoice }
+	return { pole = state.jointPoleAxisChoice }
+end
+Rig.getJointPoleAxis = uevrUtils.profiler:wrap("getJointPoleAxis", Rig.getJointPoleAxis)
 
-	--------------------------------------------------------------
-	-- 8. Apply component-space rotations
-	--------------------------------------------------------------
+function Rig:rotateShoulder(mesh, RootBone, JointBone, upperDirCS, axisShoulder, poleCS, state, smoothing)
 	-- Shoulder: constrain swing + pole twist to prevent upper-arm axial roll drift.
 	local shoulderAlignState = {
 		composeOrderSwing = state.composeOrderSwingShoulder,
 		composeOrderTwist = state.composeOrderTwistShoulder,
+		lastDesiredPole = state.lastDesiredPoleShoulder,
+		lastCurrentPole = state.lastCurrentPoleShoulder,
+		lastTwistDeg = state.lastAlignTwistDegShoulder,
 	}
 	-- _dbg_ik_align_label = (solverParams.hand == Handed.Right and stopDebug == false) and "shoulder" or nil
 	-- if solverParams.hand == Handed.Right and stopDebug == false then
@@ -1519,6 +1588,9 @@ function Rig:solveTwoBone(solverParams)
 	local ShoulderCompRot = alignBoneAxisToDirCS(mesh, RootBone, JointBone, upperDirCS, axisShoulder, poleCS, shoulderAlignState)
 	state.composeOrderSwingShoulder = shoulderAlignState.composeOrderSwing
 	state.composeOrderTwistShoulder = shoulderAlignState.composeOrderTwist
+	state.lastDesiredPoleShoulder = shoulderAlignState.lastDesiredPole
+	state.lastCurrentPoleShoulder = shoulderAlignState.lastCurrentPole
+	state.lastAlignTwistDegShoulder = shoulderAlignState.lastTwistDeg
 	if ShoulderCompRot ~= nil then
 		if smoothing > 0 then
 			-- Blend to suppress per-tick variation from animation-driven curDir (prevents chain cascade position jitter).
@@ -1538,7 +1610,10 @@ function Rig:solveTwoBone(solverParams)
  			mesh:SetBoneRotationByName(RootBone, ShoulderCompRot, EBoneSpaces.ComponentSpace)
 		end
 	end
+end
+Rig.rotateShoulder = uevrUtils.profiler:wrap("rotateShoulder", Rig.rotateShoulder)
 
+function Rig:rotateElbow(mesh, JointBone, EndBone, lowerDirCS, axisJoint, poleCS, state, smoothing)
 	-- if solverParams.hand == Handed.Right and stopDebug == false then
 	-- 	local dbgJointCS = mesh:GetBoneLocationByName(JointBone, EBoneSpaces.ComponentSpace)
 	-- 	if dbgJointCS ~= nil then
@@ -1552,6 +1627,9 @@ function Rig:solveTwoBone(solverParams)
 	local elbowAlignState = {
 		composeOrderSwing = state.composeOrderSwingElbow,
 		composeOrderTwist = state.composeOrderTwistElbow,
+		lastDesiredPole = state.lastDesiredPoleElbow,
+		lastCurrentPole = state.lastCurrentPoleElbow,
+		lastTwistDeg = state.lastAlignTwistDegElbow,
 	}
 	--_dbg_ik_align_label = (solverParams.hand == Handed.Right and stopDebug == false) and "elbow" or nil
 	if smoothing > 0 then
@@ -1561,39 +1639,39 @@ function Rig:solveTwoBone(solverParams)
 		end
 	end
 
-	local ElbowCompRot = alignBoneAxisToDirCS(mesh, JointBone, EndBone, lowerDirCS, axisJoint, poleCS, elbowAlignState)
+	local elbowRotCS = alignBoneAxisToDirCS(mesh, JointBone, EndBone, lowerDirCS, axisJoint, poleCS, elbowAlignState)
 	--_dbg_ik_align_label = nil
 	state.composeOrderSwingElbow = elbowAlignState.composeOrderSwing
 	state.composeOrderTwistElbow = elbowAlignState.composeOrderTwist
-	if ElbowCompRot ~= nil then
+	state.lastDesiredPoleElbow = elbowAlignState.lastDesiredPole
+	state.lastCurrentPoleElbow = elbowAlignState.lastCurrentPole
+	state.lastAlignTwistDegElbow = elbowAlignState.lastTwistDeg
+	if elbowRotCS ~= nil then
 		if smoothing > 0 then
 			-- Same blend as shoulder to stabilise end-bone position.
 			if state ~= nil and state.lastElbowCompRot ~= nil then
 				local a = 1 * (1 - smoothing)
-				ElbowCompRot = uevrUtils.rotator(
-					state.lastElbowCompRot.Pitch + normalizeDeg180(ElbowCompRot.Pitch - state.lastElbowCompRot.Pitch) * a,
-					state.lastElbowCompRot.Yaw   + normalizeDeg180(ElbowCompRot.Yaw   - state.lastElbowCompRot.Yaw)   * a,
-					state.lastElbowCompRot.Roll  + normalizeDeg180(ElbowCompRot.Roll  - state.lastElbowCompRot.Roll)  * a)
+				elbowRotCS = uevrUtils.rotator(
+					state.lastElbowCompRot.Pitch + normalizeDeg180(elbowRotCS.Pitch - state.lastElbowCompRot.Pitch) * a,
+					state.lastElbowCompRot.Yaw   + normalizeDeg180(elbowRotCS.Yaw   - state.lastElbowCompRot.Yaw)   * a,
+					state.lastElbowCompRot.Roll  + normalizeDeg180(elbowRotCS.Roll  - state.lastElbowCompRot.Roll)  * a)
 			end
 		end
-		mesh:SetBoneRotationByName(JointBone, ElbowCompRot, EBoneSpaces.ComponentSpace)
+		mesh:SetBoneRotationByName(JointBone, elbowRotCS, EBoneSpaces.ComponentSpace)
 		-- Cache last lower-axis for next tick to improve stability if needed.
-		if state then state.lastLowerDirCS = lowerDirCS; state.lastElbowCompRot = ElbowCompRot end
+		if state then state.lastLowerDirCS = lowerDirCS; state.lastElbowCompRot = elbowRotCS end
 	end
+	return elbowRotCS
+end
+Rig.rotateElbow = uevrUtils.profiler:wrap("rotateElbow", Rig.rotateElbow)
 
-	-- local endBonePosition = mesh:GetBoneLocationByName(EndBone, EBoneSpaces.ComponentSpace)
-	-- local endBoneRotationOut = mesh:GetBoneRotationByName(EndBone, EBoneSpaces.ComponentSpace)
-	-- if endBonePosition ~= nil then
-	-- 	if solverParams.hand == Handed.Right and stopDebug == false then
-	-- 		print("End bone pos CS before:", endBonePosition.X, endBonePosition.Y, endBonePosition.Z)
-	-- 		print("End bone rot CS before:", endBoneRotationOut.Pitch, endBoneRotationOut.Yaw, endBoneRotationOut.Roll)
-	-- 	end
-	-- end
-	--------------------------------------------------------------
-	-- 9. Apply controller rotation to hand/wrist bone and twist forarm bones
-	--------------------------------------------------------------
-	local finalHandCompRot = nil
+--This function does the final hand and optional wrist rotation using the controller rotation and a user defined offset, endBoneRotation
+function Rig:rotateHandAndWrist(mesh, endBone, wristBone, endBoneRotation, controllerRotWS, controllerRotCS, compToWorld, state, smoothing)
+	local finalHandRotCS = nil
 	if smoothing > 0 then
+		-- When the endbone and wrist bone are not rotated at all (this code commented out), the hand mesh still jitters
+		-- so although this helps its is not a complete fix for hand stability.
+
 		-- WHY WS smoothing + WS stamp:
 		-- Smoothing controllerRotCS (CS) embeds compToWorld noise because
 		--   controllerRotCS = InverseTransformRotation(compToWorld, controllerRotWS)
@@ -1623,13 +1701,13 @@ function Rig:solveTwoBone(solverParams)
 		local finalHandWorldRot = kismet_math_library:ComposeRotators(endBoneRotation, smoothedControllerRotWS)
 		-- CS version still needed for twist bone computation downstream.
 		local smoothedControllerRotCS = kismet_math_library:InverseTransformRotation(compToWorld, smoothedControllerRotWS)
-		finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, smoothedControllerRotCS)
+		finalHandRotCS = kismet_math_library:ComposeRotators(endBoneRotation, smoothedControllerRotCS)
 		-- if solverParams.hand == Handed.Right and stopDebug == false then
 		-- 	print("smoothedControllerRotWS:", smoothedControllerRotWS.Pitch, smoothedControllerRotWS.Yaw, smoothedControllerRotWS.Roll)
 		-- 	print("finalHandWorldRot:", finalHandWorldRot.Pitch, finalHandWorldRot.Yaw, finalHandWorldRot.Roll)
 		-- end
 		-- Stamp in WorldSpace: rendered WS rotation = finalHandWorldRot (independent of compToWorld noise).
-		mesh:SetBoneRotationByName(EndBone, finalHandWorldRot, EBoneSpaces.WorldSpace)
+		mesh:SetBoneRotationByName(endBone, finalHandWorldRot, EBoneSpaces.WorldSpace)
 		if wristBone ~= "" then
 			mesh:SetBoneRotationByName(wristBone, finalHandWorldRot, EBoneSpaces.WorldSpace)
 		end
@@ -1640,18 +1718,19 @@ function Rig:solveTwoBone(solverParams)
 		-- 	if _ebPosWS ~= nil then print("EndBone pos WS post-set:", _ebPosWS.X, _ebPosWS.Y, _ebPosWS.Z) end
 		-- end
 	else
-		finalHandCompRot = kismet_math_library:ComposeRotators(endBoneRotation, controllerRotCS)
-		mesh:SetBoneRotationByName(EndBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+		finalHandRotCS = kismet_math_library:ComposeRotators(endBoneRotation, controllerRotCS)
+		mesh:SetBoneRotationByName(endBone, finalHandRotCS, EBoneSpaces.ComponentSpace)
 		if wristBone ~= "" then
-			mesh:SetBoneRotationByName(wristBone, finalHandCompRot, EBoneSpaces.ComponentSpace)
+			mesh:SetBoneRotationByName(wristBone, finalHandRotCS, EBoneSpaces.ComponentSpace)
 		end
 	end
-    --print("controllerRotCS after correction:", controllerRotCS.Pitch, controllerRotCS.Yaw, controllerRotCS.Roll)
-    -- ElbowCompRot was just stamped onto JointBone — reuse it directly, no read-back needed.
-    local lowerArmRotCS = ElbowCompRot
 
-    ---------------------------------------------
+	return finalHandRotCS
+end
+Rig.rotateHandAndWrist = uevrUtils.profiler:wrap("rotateHandAndWrist", Rig.rotateHandAndWrist)
 
+
+function Rig:twistForearm(mesh, lowerDirCS, lowerArmRotCS, finalHandCompRot, twistBones, forearmTwistMax, wristTwistMax, state)
 	if state ~= nil and lowerArmRotCS ~= nil and #twistBones > 0 then
 		-- Extract the wrist→forearm "tube twist" (pronation/supination) around the forearm axis.
 		-- We use a quaternion swing–twist decomposition of the relative rotation (lowerArmRotCS -> finalHandCompRot)
@@ -1714,20 +1793,8 @@ function Rig:solveTwoBone(solverParams)
             mesh:SetBoneRotationByName(boneFName, finalCS, EBoneSpaces.ComponentSpace)
         end
     end
-
-	-- local EFFECTOR_SNAP_MAX_DIST = 5.0
-	-- local currentEndLocation = mesh:GetBoneLocationByName(EndBone, EBoneSpaces.WorldSpace)
-	-- state.lastEndLocationWS = nil
-	-- if currentEndLocation ~= nil then
-	-- 	local snapDist = kismet_math_library:VSize(
-	-- 		kismet_math_library:Subtract_VectorVector(currentEndLocation, effectorWS))
-	-- 	if snapDist ~= nil and snapDist < EFFECTOR_SNAP_MAX_DIST then
-	-- 		mesh:SetBoneLocationByName(EndBone, effectorWS, EBoneSpaces.WorldSpace)
-	-- 		state.lastEndLocationWS = currentEndLocation
-	-- 	end
-	-- end
 end
-Rig.solveTwoBone = uevrUtils.profiler:wrap("solveTwoBone", Rig.solveTwoBone)
+Rig.twistForearm = uevrUtils.profiler:wrap("twistForearm", Rig.twistForearm)
 
 -- Print all bone transforms in bone-local space for a mesh/component
 function M.printMeshBoneTransforms(mesh, boneSpace)
