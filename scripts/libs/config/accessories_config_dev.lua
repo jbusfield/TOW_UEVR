@@ -1,6 +1,6 @@
 -- Inspired by letmein's work with Stalker-2
 local uevrUtils = require("libs/uevr_utils")
-local controllers = require("libs/controllers")
+--local controllers = require("libs/controllers")
 local configui = require("libs/configui")
 local paramModule = require("libs/core/params")
 --local hands = require("libs/hands")
@@ -636,7 +636,7 @@ local function refreshSocketList(id, prefix)
     else
        --need to get all the sockets for the mesh represented by id
         if callerModule ~= nil then
-            print("Requesting sockets for attachment ID: " .. tostring(id))
+            --print("Requesting sockets for attachment ID: " .. tostring(id))
             callerModule.getSocketsForAttachmentID(id, function(names)
                 print(names)
                 local socketList = {}

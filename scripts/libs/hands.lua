@@ -135,8 +135,8 @@ local controllers = require("libs/controllers")
 local animation = require("libs/animation")
 local attachments = require("libs/attachments")
 local handsAnimation = require("libs/hands_animation")
-local accessoriesConfig = require("libs/config/accessories_config_dev")
 local pawnModule = require("libs/pawn")
+local mathLib = require("libs/core/math_lib")
 require("libs/accessories")
 
 local M = {}
@@ -152,6 +152,7 @@ local handComponents = {}
 local handDefinitions = {}
 local handBoneList = {} --used for debugging
 local offset={X=0, Y=0, Z=0, Pitch=0, Yaw=0, Roll=0}
+local baseRotation = nil
 local ignoreRelativeOffset = false
 --local inputHandlerAnimID = {} --list of animID only used for the default input handler
 local handsConfig = nil -- the configuration tool for creating hands in game
@@ -166,6 +167,7 @@ local defaultAnimationMesh = nil
 
 local status = {}
 local accessoryStatus = {}
+local destroyCallbackList = {}
 
 local gunstockOffsetsEnabled = false
 function M.setGunstockOffsetsEnabled(val)
@@ -202,6 +204,10 @@ local function executeIsAnimatingFromMeshCallback(...)
 end
 function M.registerIsAnimatingFromMeshCallback(func)
 	uevrUtils.registerUEVRCallback("is_hands_animating_from_mesh", func)
+end
+
+function M.registerOnDestroyCallback(callback)
+	table.insert(destroyCallbackList, callback)
 end
 
 
@@ -302,6 +308,27 @@ function M.getHandComponent(hand, componentName)
 	end
 end
 
+function M.getAllHandComponents()
+	local result = {}
+	for name, components in pairs(handComponents) do
+		table.insert(result, components[Handed.Left])
+		table.insert(result, components[Handed.Right])
+	end
+	return result
+end
+
+function M.getHandComponentsForHand(hand)
+	local result = {}
+	if hand == nil then return result end
+	for name, components in pairs(handComponents) do
+		local component = uevrUtils.getValid(components[hand])
+		if component ~= nil then
+			table.insert(result, component)
+		end
+	end
+	return result
+end
+
 local fixEnabled = false
 local currentProfile = nil
 local function registerFOVFix(profile)
@@ -384,6 +411,8 @@ function M.createFromConfig(configuration, profileName, animationName)
 							end
 						end
 					else
+						--replace any occurance of the string "Pawn" with pawnModule.getPawnBaseName() to allow for different pawn base names
+						meshPropertyName = meshPropertyName:gsub("Pawn", pawnModule.getPawnBaseName())
 						local component = uevrUtils.getObjectFromDescriptor(meshPropertyName, false) -- "Pawn.Mesh(Arm).Glove")
 						--print(component,meshPropertyName)
 						if component ~= nil then
@@ -412,7 +441,6 @@ function M.createFromConfig(configuration, profileName, animationName)
 			--if M.exists() then
 				-- TODO replace this with a global event
 				attachments.setAnimationIDs(configuration["attachments"])
-				accessoriesConfig.setAnimationIDs(configuration["attachments"])
 				--going to need to call fixMeshFOV on lazy poll
 				for name, handComponent in pairs(handComponents) do
 					--print(name, profileName, handComponent[0], handComponent[1])
@@ -462,16 +490,19 @@ function M.create(skeletalMeshComponent, definition, handAnimations)
 							animation.initializeBones(handComponents[name][index], initialTransform[index==Handed.Left and "left_hand" or "right_hand"])
 						end
 
-						local animID = skeletalMeshDefinition[index==Handed.Left and "Left" or "Right"]["AnimationID"]
-						if animID ~= nil then
-							-- local suffix = getAnimIDSuffix(animID)
-							-- if suffix ~= nil then inputHandlerAnimID[animID] = suffix end
-							-- print("@@@@@@",animID, suffix)
-							-- animation.add(animID, handComponents[name][index], handAnimations)
-							-- animation.initialize(animID, handComponents[name][index])
-							handsAnimation.createAnimationHandler(animID, handComponents[name][index], handAnimations)
+						if skeletalMeshDefinition[index==Handed.Left and "Left" or "Right"] ~= nil then
+							local animID = skeletalMeshDefinition[index==Handed.Left and "Left" or "Right"]["AnimationID"]
+							if animID ~= nil then
+								-- local suffix = getAnimIDSuffix(animID)
+								-- if suffix ~= nil then inputHandlerAnimID[animID] = suffix end
+								-- print("@@@@@@",animID, suffix)
+								-- animation.add(animID, handComponents[name][index], handAnimations)
+								-- animation.initialize(animID, handComponents[name][index])
+								handsAnimation.createAnimationHandler(animID, handComponents[name][index], handAnimations)
+							end
 						end
-						executeOnCreatedCallback(index, handComponents[name][index])
+						
+						executeOnCreatedCallback(index, handComponents[name][index], name)
 					end
 				end
 				--if autoHandleInput == true then
@@ -509,8 +540,9 @@ function M.createComponent(skeletalMeshComponent, name, hand, definition)
 			component.bCastDynamicShadow = false
 
 			controllers.attachComponentToController(hand, component)
-			local baseRotation = ignoreRelativeOffset and uevrUtils.rotator(0,0,0) or skeletalMeshComponent.RelativeRotation
-			uevrUtils.set_component_relative_transform(component, offset, {Pitch=baseRotation.Pitch+offset.Pitch, Yaw=baseRotation.Yaw+offset.Yaw,Roll=baseRotation.Roll+offset.Roll})
+			--save base rotation in case its needed for gunstock offsets
+			baseRotation = ignoreRelativeOffset and uevrUtils.rotator(0,0,0) or skeletalMeshComponent.RelativeRotation
+			uevrUtils.set_component_relative_transform(component, offset, {Pitch = (baseRotation and baseRotation.Pitch or 0)+offset.Pitch, Yaw=(baseRotation and baseRotation.Yaw or 0)+offset.Yaw,Roll=(baseRotation and baseRotation.Roll or 0)+offset.Roll})
 
 			if definition ~= nil then
 				local jointName = definition["Name"]
@@ -561,7 +593,7 @@ end
 --only for debugging
 function M.updateOffset(skeletalMeshComponent, newOffset, ignoreRelative)
 	if skeletalMeshComponent ~= nil then
-		local baseRotation = ignoreRelative and uevrUtils.rotator(0,0,0) or skeletalMeshComponent.RelativeRotation
+		baseRotation = ignoreRelative and uevrUtils.rotator(0,0,0) or skeletalMeshComponent.RelativeRotation
 		local component = handComponents["Arms"][Handed.Right]
 		uevrUtils.set_component_relative_transform(component, newOffset, {Pitch=baseRotation.Pitch+newOffset.Pitch, Yaw=baseRotation.Yaw+newOffset.Yaw,Roll=baseRotation.Roll+newOffset.Roll})
 	end
@@ -575,12 +607,55 @@ function M.setAnimationMesh(mesh)
 	defaultAnimationMesh = mesh
 end
 
-function M.updateAnimationFromMesh(hand, mesh, componentName)
+function M.setRootBoneRotation(rotator)
+	if rotator == nil then rotator = uevrUtils.rotator(0,0,0) end
+	for name, components in pairs(handComponents) do
+		for index = Handed.Left , Handed.Right do
+			local component = components[index]
+			if uevrUtils.getValid(component) ~= nil and component.SetBoneRotationByName ~= nil then
+				component:SetBoneRotationByName(uevrUtils.fname_from_string("Root"), rotator, 1)
+			end
+		end
+	end
+end
+
+function M.transformBoneToRoot(hand, componentName)
+	componentName = getComponentName(componentName)
+	if componentName == nil or componentName == "" or handDefinitions[componentName] == nil then
+		M.print("Could not transformBoneToRoot because component is undefined")
+	else
+		local component = M.getHandComponent(hand, componentName)
+		local handStr = hand == Handed.Left and "Left" or "Right"
+		local definition = handDefinitions[componentName][handStr]
+		if definition ~= nil then
+			local jointName = definition["Name"]
+			if jointName ~= nil and jointName ~= "" then
+				local success, response = pcall(function()
+					local location = getValidVector(definition, "Location", {0,0,0})
+					local rotation = getValidRotator(definition, "Rotation", {0,0,0})
+					local scale = getValidVector(definition, "Scale", {1,1,1})
+					local taperOffset = getValidVector(definition, "TaperOffset", {0,0,0})
+					--When an animation is applied, every bone in the entire skeleton is moved, so we need to reapply the transform from wrist to root
+					local optimizeAnimationFromMesh = handDefinitions[componentName]["OptimizeAnimations"] ~= false
+					local optimizationRootBone = definition["OptimizeAnimationsRootBone"]
+					animation.transformBoneToRoot(component, jointName, location, rotation, scale, taperOffset, optimizeAnimationFromMesh, optimizationRootBone)
+					print("here", optimizeAnimationFromMesh, optimizationRootBone, component:get_full_name())
+					--component:SetLeaderPoseComponent(nil, false)
+				end)
+				if success == false then
+					M.print("[hands] " .. response, LogLevel.Error)
+				end
+			end
+		end
+	end
+end
+
+function M.updateAnimationFromMesh_Native(hand, mesh, componentName)
 	--print("Updating animation from mesh", hand, mesh:get_full_name(), componentName)
 	if mesh ~= nil then
 		componentName = getComponentName(componentName)
 		if componentName == nil or componentName == "" or handDefinitions[componentName] == nil then
-			M.print("Could not update Animation From Mesh because component is undefined")
+			M.print("Could not update Animation From Mesh Full because component is undefined")
 		else
 			local component = M.getHandComponent(hand, componentName)
 			local handStr = hand == Handed.Left and "Left" or "Right"
@@ -590,7 +665,7 @@ function M.updateAnimationFromMesh(hand, mesh, componentName)
 				if jointName ~= nil and jointName ~= "" then
 					local success, response = pcall(function()
 						component:CopyPoseFromSkeletalComponent(mesh)
-						--print("here", component:get_full_name())
+						--print("here", component:get_full_name(), mesh:get_full_name())
 						--component:SetLeaderPoseComponent(mesh, true)
 						local location = getValidVector(definition, "Location", {0,0,0})
 						local rotation = getValidRotator(definition, "Rotation", {0,0,0})
@@ -610,6 +685,32 @@ function M.updateAnimationFromMesh(hand, mesh, componentName)
 		end
 	end
 end
+
+function M.updateAnimationFromMesh(hand, mesh, componentName, useCompatibilityMode)
+	if useCompatibilityMode ~= true then
+		M.updateAnimationFromMesh_Native(hand, mesh, componentName)
+	else
+		-- This is ~2x slower than native but guaranteed to work
+		-- should only use on non-tick cases or when native is not working for some reason (ie Hogwarts where MasterComponent overide prevents native)
+        if mesh ~= nil then
+			componentName = getComponentName(componentName)
+			if componentName == nil or componentName == "" or handDefinitions[componentName] == nil then
+				M.print("Could not update Animation From Mesh because component is undefined")
+			else
+				local component = M.getHandComponent(hand, componentName)
+				local handStr = hand == Handed.Left and "Left" or "Right"
+				local definition = handDefinitions[componentName][handStr]
+				if definition ~= nil then
+					local jointName = definition["Name"]
+					if jointName ~= nil and jointName ~= "" then
+						animation.copyDescendantTransforms(mesh, component, jointName, false)
+					end
+				end
+			end
+		end
+	end
+end
+M.updateAnimationFromMesh = uevrUtils.profiler:wrap("updateAnimationFromMesh", M.updateAnimationFromMesh)
 
 function M.setHandsAreAnimatingFromMesh(isLeftAnimating, isRightAnimating, leftMesh, rightMesh, componentName)
 	if isLeftAnimating ~= nil then
@@ -762,6 +863,9 @@ end
 
 
 function M.destroyHands()
+	for _, callback in ipairs(destroyCallbackList) do
+		callback()
+	end
 	--since we didnt use an existing actor as parent in createComponent(), destroy the owner actor too
 	for name, components in pairs(handComponents) do
 		M.print("Destroying " .. name .. " hand components", LogLevel.Debug)
@@ -935,7 +1039,11 @@ uevrUtils.registerUEVRCallback("gunstock_transform_change", function(id, newLoca
 	if gunstockOffsetsEnabled then
 		local hand = M.getHandComponent(Handed.Right)
 		if hand ~= nil then
-			hand.RelativeRotation = newRotation
+			if baseRotation ~= nil then
+				hand.RelativeRotation = mathLib.composeRotators(baseRotation, newRotation)
+			else
+				hand.RelativeRotation = newRotation
+			end
 		end
 	end
 end)
@@ -1165,6 +1273,7 @@ uevrUtils.setInterval(200, function()
 		if isHidden ~= wereHidden then
 			wereHidden = isHidden
 			M.hideHands(isHidden or false)
+			M.print("Hand visibility changed from hands: isHidden=" .. tostring(isHidden))
 		end
 	end
 end)
@@ -1225,10 +1334,15 @@ uevrUtils.registerPreLevelChangeCallback(function(level)
 	status = {}
 end)
 
+local autoCreateFileName = "hands_parameters"
+function M.setAutoCreateFileName(fileName)
+	autoCreateFileName = fileName
+end
+
 local function tryAutoCreateHands()
-	if autoCreateHands and not M.exists()then
+	if autoCreateHands and not M.exists() then
 		--see if the defaults params file exists
-		local paramsFile = "hands_parameters"
+		local paramsFile = autoCreateFileName
 		--if we already found it once we dont ned to keep reading from json to see if it exists
 		if autoCreateConfigName ~= nil then
 			M.createFromConfig(paramsFile, autoCreateConfigName, autoCreateAnimationName)
@@ -1272,47 +1386,78 @@ end)
 -- Accessory handlers -------------------------------------
 -- Hand-specific attachment helpers (keep hand-level logic in this file)
 local function saveHandSnapshot(handed, statusKey)
-	local handObj = M.getHandComponent(handed)
-	if uevrUtils.getValid(handObj) == nil then return end
-	accessoryStatus[statusKey] = {
-		parent = handObj.AttachParent,
-		socket = (handObj.AttachSocketName and handObj.AttachSocketName:to_string()) or "",
-		location = {X = handObj.RelativeLocation.X, Y = handObj.RelativeLocation.Y, Z = handObj.RelativeLocation.Z},
-		rotation = {Pitch = handObj.RelativeRotation.Pitch, Yaw = handObj.RelativeRotation.Yaw, Roll = handObj.RelativeRotation.Roll}
-	}
+	for name, components in pairs(handComponents) do
+		local handObj = uevrUtils.getValid(components[handed])
+		if handObj ~= nil then
+			accessoryStatus[statusKey] = {
+				parent = handObj.AttachParent,
+				socket = (handObj.AttachSocketName and handObj.AttachSocketName:to_string()) or "",
+				location = {X = handObj.RelativeLocation.X, Y = handObj.RelativeLocation.Y, Z = handObj.RelativeLocation.Z},
+				rotation = {Pitch = handObj.RelativeRotation.Pitch, Yaw = handObj.RelativeRotation.Yaw, Roll = handObj.RelativeRotation.Roll}
+			}
+		end
+	end
 end
 
 local function restoreHandSnapshot(handed)
-	local statusKey = "hand_" .. tostring(handed)
-	local handObj = M.getHandComponent(handed)
-	if uevrUtils.getValid(handObj) == nil then return end
-	local s = accessoryStatus[statusKey]
-	if handObj ~= nil and s ~= nil and handObj.K2_AttachTo ~= nil then
-		local parent = s.parent
-		local socket = s.socket
-		local location = s.location
-		local rotation = s.rotation
-		if parent ~= nil then
-			handObj:K2_AttachTo(parent, uevrUtils.fname_from_string(socket or ""), 0, false)
-			uevrUtils.set_component_relative_transform(handObj, location or {0,0,0}, rotation or {0,0,0})
+	for name, components in pairs(handComponents) do
+		local handObj = uevrUtils.getValid(components[handed])
+		if handObj ~= nil then
+			local statusKey = "hand_" .. tostring(handed) .. "_" .. handObj:get_full_name()
+			local s = accessoryStatus[statusKey]
+			if s ~= nil and handObj.K2_AttachTo ~= nil then
+				local parent = s.parent
+				local socket = s.socket
+				local location = s.location
+				local rotation = s.rotation
+				if parent ~= nil then
+					handObj:K2_AttachTo(parent, uevrUtils.fname_from_string(socket or ""), 0, false)
+					uevrUtils.set_component_relative_transform(handObj, location or {0,0,0}, rotation or {0,0,0}, {1,1,1})
+				end
+				accessoryStatus[statusKey] = nil
+			end
 		end
-		accessoryStatus[statusKey] = nil
 	end
 end
 
 local function attachHandToTarget(handed, parentAttachment, socketName, attachType, loc, rot)
-	local handObj = M.getHandComponent(handed)
-	if uevrUtils.getValid(handObj) == nil then return end
-	local statusKey = "hand_" .. tostring(handed)
-	if accessoryStatus[statusKey] == nil then
-		saveHandSnapshot(handed, statusKey)
+	for name, components in pairs(handComponents) do
+		local handObj = uevrUtils.getValid(components[handed])
+		if handObj ~= nil then
+			if uevrUtils.getValid(handObj) == nil then return end
+			local statusKey = "hand_" .. tostring(handed) .. "_" .. handObj:get_full_name()
+			if accessoryStatus[statusKey] == nil then
+				saveHandSnapshot(handed, statusKey)
+			end
+			if handObj.K2_AttachTo ~= nil then
+				local socketScale = {1, 1, 1}
+				if socketName ~= nil and socketName ~= "" then
+					local socketTranforn = parentAttachment:GetSocketTransform(uevrUtils.fname_from_string(socketName), 2)
+					socketScale = {1/socketTranforn.Scale3D.X, 1/socketTranforn.Scale3D.Y, 1/socketTranforn.Scale3D.Z}
+				end
+				local finalLocation = loc and ({loc[1] * socketScale[1], loc[2] * socketScale[2], loc[3] * socketScale[3]}) or {0,0,0}
+				handObj:K2_AttachTo(parentAttachment, uevrUtils.fname_from_string(socketName or ""), attachType or 0, false)
+				if baseRotation ~= nil then
+					uevrUtils.set_component_relative_transform(handObj, finalLocation, mathLib.composeRotators(baseRotation, uevrUtils.rotator(rot) or uevrUtils.rotator(0,0,0)), socketScale)
+				else
+					uevrUtils.set_component_relative_transform(handObj, finalLocation, rot or {0,0,0}, socketScale)
+				end
+				--print("Attached hand to accessory with socket: ", handObj:K2_GetComponentScale().X)
+			end
+		end
 	end
-	if handObj.K2_AttachTo ~= nil then
-		handObj:K2_AttachTo(parentAttachment, uevrUtils.fname_from_string(socketName or ""), attachType or 0, false)
-		uevrUtils.set_component_relative_transform(handObj, loc or {0,0,0}, rot or {0,0,0})
-	end
+
 end
 
+
+-- Tell accessories which components this handler will parent onto the attachment
+-- so it can break hierarchy cycles before on_accessory_attach runs.
+uevrUtils.registerUEVRCallback("accessory_attach_components", function(handed, outList)
+	if type(outList) ~= "table" then return end
+	for _, component in ipairs(M.getHandComponentsForHand(handed)) do
+		table.insert(outList, component)
+	end
+end)
 
 uevrUtils.registerUEVRCallback("on_accessory_attach", function(handed, parentAttachment, socketName, attachType, loc, rot)
 	attachHandToTarget(handed, parentAttachment, socketName, attachType, loc, rot)

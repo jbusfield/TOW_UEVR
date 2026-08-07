@@ -331,6 +331,7 @@ Available Widget Types:
 
 
 ]]--
+--local uevrUtils = require('libs/uevr_utils')
 
 local M = {}
 
@@ -425,9 +426,11 @@ local configValues = {}
 local itemMap = {}
 local panelList = {}
 local layoutDefinitions = {}
+local layoutElementMap = {}
 local updateFunctions = {}
 local createFunctions = {}
 local createOrUpdateFunctions = {}
+local updateInProgress = {}
 local defaultFilename = "config_default"
 local treeInitialized = {}
 
@@ -448,17 +451,23 @@ local function doUpdate(panelID, widgetID, value, updateConfigValue, noCallbacks
 		end
 
 		if noCallbacks ~= true then
-			local funcList = updateFunctions[widgetID]
-			if funcList ~= nil and #funcList > 0 then
-				for i = 1, #funcList do
-					funcList[i](value)
+			if updateInProgress[widgetID] then
+				-- skip callbacks to prevent re-entrant updates
+			else
+				updateInProgress[widgetID] = true
+				local funcList = updateFunctions[widgetID]
+				if funcList ~= nil and #funcList > 0 then
+					for i = 1, #funcList do
+						funcList[i](value)
+					end
 				end
-			end
-			funcList = createOrUpdateFunctions[widgetID]
-			if funcList ~= nil and #funcList > 0 then
-				for i = 1, #funcList do
-					funcList[i](value)
+				funcList = createOrUpdateFunctions[widgetID]
+				if funcList ~= nil and #funcList > 0 then
+					for i = 1, #funcList do
+						funcList[i](value)
+					end
 				end
+				updateInProgress[widgetID] = false
 			end
 		end
 		if panelList[panelID] ~= nil then panelList[panelID].isDirty = true end
@@ -833,18 +842,29 @@ local function drawUI(panelID)
 	end
 end
 
-local function getDefinitionElement(panelID, id)
-	--print(panelID)
+local function rebuildDefinitionElementMap(panelID)
+	layoutElementMap[panelID] = {}
 	local definition = layoutDefinitions[panelID]
-	if definition ~= nil then
-		for _, element in ipairs(definition) do
-			if element.id == id then
-				return element
-			end
+	if definition == nil then
+		return
+	end
+
+	for _, element in ipairs(definition) do
+		if element.id ~= nil then
+			layoutElementMap[panelID][element.id] = element
 		end
 	end
-    return nil -- Return nil if the id is not found
 end
+--rebuildDefinitionElementMap = uevrUtils.profiler:wrap("ConfigUI: rebuildDefinitionElementMap", rebuildDefinitionElementMap)
+
+local function getDefinitionElement(panelID, id)
+	local definitionMap = layoutElementMap[panelID]
+	if definitionMap ~= nil then
+		return definitionMap[id]
+	end
+	return nil
+end
+--getDefinitionElement = uevrUtils.profiler:wrap("ConfigUI: getDefinitionElement", getDefinitionElement)
 
 local function wrapTextOnWordBoundary(text, maxCharsPerLine)
 	if text == nil then text = "" end
@@ -896,6 +916,7 @@ function M.updatePanel(panelDefinition)
 	end
 
 	layoutDefinitions[panelID] = panelDefinition["layout"]
+	rebuildDefinitionElementMap(panelID)
 
 	panelList[panelID] = {isDirty=false, timeSinceLastSave=0, fileName=fileName, isHidden=panelDefinition["isHidden"]}
 
@@ -939,6 +960,7 @@ function M.createPanel(panelDefinition)
 	end
 
 	layoutDefinitions[panelID] = panelDefinition["layout"]
+	rebuildDefinitionElementMap(panelID)
 
 	panelList[panelID] = {isDirty=false, timeSinceLastSave=0, fileName=fileName, isHidden=panelDefinition["isHidden"]}
 
@@ -1303,7 +1325,7 @@ end
 function M.setLabel(widgetID, newLabel)
 	local item = getDefinitionElement(M.getPanelID(widgetID), widgetID)
 	if item ~= nil then
-		if item.widgetType == "text" and item.wrapped == true then
+		if item.widgetType == "text" or item.widgetType == "text_colored" and item.wrapped == true then
 			item.label_wrapped = wrapTextOnWordBoundary(newLabel, item.textWidth)
 		end
 		item.label = newLabel

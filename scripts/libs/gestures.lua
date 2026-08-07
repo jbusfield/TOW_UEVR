@@ -7,12 +7,19 @@ local earGripForwardDotThreshold = 0.8
 local mouthTriggerDistance = 25.0
 local mouthForwardDotMaxThreshold = 0.65
 local mouthForwardDotMinThreshold = 0.35
-local headTriggerDistance = 20.0
+local headTriggerDistance = 25.0
 local headForwardDotMaxThreshold = 0.65
 local headForwardDotMinThreshold = 0.0
 local eyesTriggerDistance = 15.0
 local eyesForwardDotThreshold = 0.85
-local holsterTriggerAngle = -65.0
+local chestGripTriggerDistance = 15.0
+local chestOffsetZ = -35.0
+local chestOffsetForward = 5.0
+-- Degrees below horizontal required for a holster (negative pitch-equivalent).
+-- Detection uses the controller forward vector vs world down, not Euler Pitch alone,
+-- so roll/yaw no longer false-negatives a downward aim.
+local holsterTriggerAngle = -60.0
+local holsterMinDownDot = math.sin(math.rad(math.abs(holsterTriggerAngle)))
 
 local M = {}
 
@@ -35,6 +42,7 @@ M.Gesture =
 	SWIPE_DOWN = 14,
 	SNATCH = 15,
 	GRIP_COMPONENT = 16,
+	CHESTGRAB = 17,
 }
 
 local currentLogLevel = LogLevel.Error
@@ -350,10 +358,9 @@ local function detectHolster(state, hand, continuous)
 	end
 	if (continuous == true or not holsterGripOn) and uevrUtils.isButtonPressed(state, gripButton) then
 		holsterGripOn = true
-		local rotation = controllers.getControllerRotation(hand)
-		--print(rotation.Pitch,rotation.Yaw,rotation.Roll)
-		--only holster if the hand is pointing down
-		if rotation ~= nil and rotation.Pitch < holsterTriggerAngle then
+		-- World-space forward·down is stable under yaw/roll; Euler Pitch alone is not.
+		local forward = controllers.getControllerDirection(hand)
+		if forward ~= nil and -forward.Z >= holsterMinDownDot then
 			return true
 		end
 	elseif holsterGripOn and uevrUtils.isButtonNotPressed(state, gripButton)  then
@@ -384,6 +391,44 @@ local function detectReload(state, hand, continuous)
 		reloadGripOn = false
 	end
 	return false
+end
+
+local bodyGripOn = false
+local function detectBody(state, hand, continuous)
+	local gripChest = false
+
+	local isGripped, isTriggerred = false, false
+	if hand == Handed.Right then
+		isGripped = uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_RIGHT_SHOULDER)
+		isTriggerred = state.Gamepad.bRightTrigger > 128
+	else
+		isGripped = uevrUtils.isButtonPressed(state, XINPUT_GAMEPAD_LEFT_SHOULDER)
+		isTriggerred = state.Gamepad.bLeftTrigger > 128
+	end
+
+	if (continuous == true or not bodyGripOn) and (isGripped or isTriggerred) then
+		bodyGripOn = true
+		local headLocation = controllers.getControllerLocation(2)
+		local handLocation = controllers.getControllerLocation(hand)
+		if headLocation ~= nil and handLocation ~= nil then
+			local headForward = controllers.getControllerDirection(2)
+			if headForward ~= nil then
+				local chestLocation = {
+					X = headLocation.X + headForward.X * chestOffsetForward,
+					Y = headLocation.Y + headForward.Y * chestOffsetForward,
+					Z = headLocation.Z + chestOffsetZ
+				}
+				local distance = magnitude(subtract(handLocation, chestLocation))
+				--print(distance)
+				if distance < chestGripTriggerDistance then
+					gripChest = isGripped
+				end
+			end
+		end
+	elseif bodyGripOn and not (isGripped or isTriggerred) then
+		bodyGripOn = false
+	end
+	return gripChest
 end
 
 -- local earGrabGripOn = false
@@ -532,6 +577,9 @@ function M.detectGestureWithState(id, state, hand, continuous)
 		return detectHolster(state, hand, continuous)
 	elseif id == M.Gesture.RELOAD then
 		return detectReload(state, hand, continuous)
+	elseif id == M.Gesture.CHESTGRAB then
+		local gripChest = detectBody(state, hand, continuous)
+		return gripChest
 	elseif id == M.Gesture.EAT then
 		local gripMouth, gripEyes, gripHead, gripEar, triggerMouth, triggerEyes, triggerHead, triggerEar = detectFace(state, hand, continuous)
 		return gripMouth
@@ -576,6 +624,10 @@ end
 
 function M.getHeadGestures(state, hand, continuous)
 	return detectFace(state, hand, continuous)
+end
+
+function M.getBodyGestures(state, hand, continuous)
+	return detectBody(state, hand, continuous)
 end
 
 function M.getSwipeGestures(deltaTime, hand, currentPos, currentRot, pawnPos, pawnRot)
